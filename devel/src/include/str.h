@@ -29,6 +29,7 @@ extern "C" {
 #endif
 
 #include <stdio.h>
+#include <string.h>
 
 #if defined(__x86_64__)
 
@@ -54,7 +55,7 @@ extern "C" {
 
 #else
 
-   #define strvlen(s) (int)strlen(s)
+   static inline int strvlen(const char *s) { return (int)strlen(s); }
 
 #endif
 

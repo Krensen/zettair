@@ -6,6 +6,10 @@
 #include <assert.h>
 #include <stdlib.h>
 #include <fcntl.h>
+
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
 #include <unistd.h>
 #include <errno.h>
 #include <string.h>

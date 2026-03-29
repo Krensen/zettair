@@ -162,6 +162,10 @@ void mlparse_wrap_delete(struct mlparse_wrap *wrapper) {
 #include <stdlib.h>
 #include <stdio.h>
 #include <strings.h>
+
+#ifndef O_BINARY
+#define O_BINARY 0
+#endif
 #include <string.h>
 
 void parse(struct mlparse_wrap *parser, FILE *output) {

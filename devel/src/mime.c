@@ -21,6 +21,7 @@
 #include "str.h"
 
 #include <ctype.h>
+#include <string.h>
           
 struct mime_lookup {
     const char *name;
