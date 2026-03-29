@@ -1,14 +1,55 @@
 .DS_Store
-*.o
-zet
 
-# Large data files — not for GitHub
+# Build artifacts
+devel/zet
+devel/zet_*
+devel/btree
+devel/stem
+devel/stop_gen
+devel/hashtime
+devel/chash.test
+devel/lcrand.test
+devel/mime.test
+devel/mlparse.test
+devel/mlparse_wrap.test
+devel/mrwlock.test
+devel/objalloc.test
+devel/poolalloc.test
+devel/psettings_gen
+devel/psettings_gen.test
+devel/staticalloc.test
+devel/stem.test
+devel/libzet.la
+devel/libtool
+devel/config.log
+devel/config.status
+devel/Makefile
+devel/setup.py
+devel/include
+devel/.libs/
+devel/src/*.o
+devel/src/*.lo
+devel/src/*.bak
+devel/src/.deps/
+devel/src/.dirstamp
+devel/src/include/stamp-h1
+devel/src/test/
+devel/tools/.deps/
+devel/tools/.dirstamp
+
+# Large data files
 wikipedia/simplewiki.xml
+wikipedia/simplewiki.xml.bz2
 wikipedia/simplewiki.trec
 wikipedia/simplewiki_snippets.json
 wikipedia/simplewiki_images.json
+wikipedia/simplewiki_titles.txt
+wikipedia/autosuggest.json
+wikipedia/click_prior.bin
+wikipedia/docno_map.tsv
+wikipedia/clickstream-enwiki-*.tsv.gz
+wikipedia/clickstream_state.json
+
+# Index files
 wikiindex/
 testindex/
-devel/zet
-devel/*.o
-devel/src/*.o
