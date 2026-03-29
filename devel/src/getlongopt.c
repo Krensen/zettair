@@ -14,6 +14,7 @@
 
 #include <errno.h>
 #include <stdlib.h>
+#include <string.h>
 
 /* all information needed to parse arguments */
 struct getlongopt {

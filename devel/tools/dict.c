@@ -24,6 +24,7 @@
 
 #include "zettair.h"
 
+#include "str.h"
 #include <ctype.h>
 #include <unistd.h>
 #include <stdio.h>

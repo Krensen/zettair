@@ -7,6 +7,7 @@
 
 #include "zettair.h"
 
+#include "str.h"
 #include "test.h"
 #include "getlongopt.h"
 #include "zglob.h"
