@@ -1,3 +1,14 @@
 .DS_Store
 *.o
 zet
+
+# Large data files — not for GitHub
+wikipedia/simplewiki.xml
+wikipedia/simplewiki.trec
+wikipedia/simplewiki_snippets.json
+wikipedia/simplewiki_images.json
+wikiindex/
+testindex/
+devel/zet
+devel/*.o
+devel/src/*.o
