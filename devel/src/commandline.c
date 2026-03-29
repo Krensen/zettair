@@ -1475,6 +1475,17 @@ int main(int argc, char **argv) {
             if ((idx = index_load(args->prefix, args->memory, args->lopts, &args->lopt))
              && (results = malloc(sizeof(*results) * args->results))) {
 
+                /* Load click prior if ZET_CLICK_PRIOR env var is set */
+                extern void okapi_load_prior(const char *path, double alpha);
+                {
+                    const char *prior_path = getenv("ZET_CLICK_PRIOR");
+                    if (prior_path) {
+                        const char *alpha_str = getenv("ZET_CLICK_ALPHA");
+                        double alpha = alpha_str ? atof(alpha_str) : 0.3;
+                        okapi_load_prior(prior_path, alpha);
+                    }
+                }
+
                 gettimeofday(&then, NULL);
 
                 /* get word length for this index */

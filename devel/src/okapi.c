@@ -28,6 +28,47 @@
 
 #include "search.h"
 #include "str.h"
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+/* ── Click prior — loaded from ZET_CLICK_PRIOR at startup ── */
+static float        *g_click_prior     = NULL;
+static unsigned int  g_click_prior_len = 0;
+static double        g_click_alpha     = 0.3;
+
+void okapi_load_prior(const char *path, double alpha) {
+    FILE *f = fopen(path, "rb");
+    if (!f) {
+        fprintf(stderr, "[click_prior] could not open %s\n", path);
+        return;
+    }
+    fseek(f, 0, SEEK_END);
+    long sz = ftell(f);
+    rewind(f);
+    free(g_click_prior);
+    g_click_prior_len = (unsigned int)(sz / sizeof(float));
+    g_click_prior     = (float *)malloc(sz);
+    if (g_click_prior) {
+        fread(g_click_prior, sizeof(float), g_click_prior_len, f);
+        fprintf(stderr, "[click_prior] loaded %u docs from %s (alpha=%.2f)\n",
+                g_click_prior_len, path, alpha);
+    }
+    fclose(f);
+    g_click_alpha = alpha;
+}
+
+static inline double click_boost(unsigned long int docno) {
+    /* Returns 1.0 (no change) — inline multiplication disabled.
+       Click prior is applied additively in post() instead. */
+    return 1.0;
+}
+
+static inline double click_addend(unsigned long int docno) {
+    if (g_click_prior && docno < g_click_prior_len && g_click_prior[docno] > 0.0f)
+        return g_click_alpha * log(1.0 + (double)g_click_prior[docno]);
+    return 0.0;
+}
 
 #include <stdlib.h>
 
@@ -152,6 +193,9 @@ static enum search_ret post(struct index *idx, struct query *query, struct searc
         assert(acc->acc.docno < docmap_entries(idx->map));
         /* METRIC_POST_PER_DOC */
 
+        /* Add click prior as a small additive nudge to final score */
+        acc->acc.weight += click_addend(acc->acc.docno);
+
         acc = acc->next;
     }
 
@@ -247,7 +291,7 @@ static enum search_ret or_decode(struct index *idx, struct query *query,
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
                 r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
-                (acc->acc.weight) += r_dt * w_t * r_qt;
+                (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
             } else {
                 struct search_acc_cons *newacc;
@@ -263,7 +307,7 @@ static enum search_ret or_decode(struct index *idx, struct query *query,
                 acc->acc.weight = 0.0;
                 /* METRIC_PER_DOC */
                 r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
-                (acc->acc.weight) += r_dt * w_t * r_qt;
+                (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
                 *prevptr = newacc;
                 accs_added++;
@@ -347,7 +391,7 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
                 r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
-                (acc->acc.weight) += r_dt * w_t * r_qt;
+                (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
             } else {
                 struct search_acc_cons *newacc;
@@ -363,7 +407,7 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
                 acc->acc.weight = 0.0;
                 /* METRIC_PER_DOC */
                 r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
-                (acc->acc.weight) += r_dt * w_t * r_qt;
+                (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
                 *prevptr = newacc;
                 accs_added++;
@@ -450,7 +494,7 @@ static enum search_ret and_decode(struct index *idx, struct query *query,
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
                 r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
-                (acc->acc.weight) += r_dt * w_t * r_qt;
+                (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
 
                 /* go to next accumulator */
@@ -562,7 +606,7 @@ static enum search_ret and_decode_offsets(struct index *idx,
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
                 r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
-                (acc->acc.weight) += r_dt * w_t * r_qt;
+                (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
 
                 /* go to next accumulator */
@@ -711,7 +755,7 @@ static enum search_ret thresh_decode(struct index *idx, struct query *query,
         f_dt = thresh;
         /* METRIC_CONTRIB */
         r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (avg_D_terms)) / avg_D_terms)) + f_dt));
-        (acc->acc.weight) += r_dt * w_t * r_qt;
+        (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
         results->v_t = acc->acc.weight;
 
@@ -734,7 +778,7 @@ static enum search_ret thresh_decode(struct index *idx, struct query *query,
             f_dt++;
             /* METRIC_CONTRIB */
             r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (avg_D_terms)) / avg_D_terms)) + f_dt));
-            (acc->acc.weight) += r_dt * w_t * r_qt;
+            (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
         } while (acc->acc.weight < results->v_t && f_dt < INF);
         thresh = f_dt; 
@@ -774,7 +818,7 @@ static enum search_ret thresh_decode(struct index *idx, struct query *query,
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
                 r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
-                (acc->acc.weight) += r_dt * w_t * r_qt;
+                (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
 
                 if (acc->acc.weight < results->v_t) {
@@ -806,7 +850,7 @@ static enum search_ret thresh_decode(struct index *idx, struct query *query,
                          * accumulators */
                         /* METRIC_PER_DOC */
                         r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
-                        (acc->acc.weight) += r_dt * w_t * r_qt;
+                        (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
                         *prevptr = newacc;
                         results->accs++;
@@ -856,7 +900,7 @@ static enum search_ret thresh_decode(struct index *idx, struct query *query,
                         acc->acc.weight = 0.0;
                         /* METRIC_CONTRIB */
                         r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (avg_D_terms)) / avg_D_terms)) + f_dt));
-                        (acc->acc.weight) += r_dt * w_t * r_qt;
+                        (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
                         results->v_t = acc->acc.weight;
                         acc = *prevptr;
@@ -1017,7 +1061,7 @@ static enum search_ret thresh_decode_offsets(struct index *idx,
         f_dt = thresh;
         /* METRIC_CONTRIB */
         r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (avg_D_terms)) / avg_D_terms)) + f_dt));
-        (acc->acc.weight) += r_dt * w_t * r_qt;
+        (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
         results->v_t = acc->acc.weight;
 
@@ -1040,7 +1084,7 @@ static enum search_ret thresh_decode_offsets(struct index *idx,
             f_dt++;
             /* METRIC_CONTRIB */
             r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (avg_D_terms)) / avg_D_terms)) + f_dt));
-            (acc->acc.weight) += r_dt * w_t * r_qt;
+            (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
         } while (acc->acc.weight < results->v_t && f_dt < INF);
         thresh = f_dt; 
@@ -1081,7 +1125,7 @@ static enum search_ret thresh_decode_offsets(struct index *idx,
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
                 r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
-                (acc->acc.weight) += r_dt * w_t * r_qt;
+                (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
 
                 if (acc->acc.weight < results->v_t) {
@@ -1113,7 +1157,7 @@ static enum search_ret thresh_decode_offsets(struct index *idx,
                          * accumulators */
                         /* METRIC_PER_DOC */
                         r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
-                        (acc->acc.weight) += r_dt * w_t * r_qt;
+                        (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
                         *prevptr = newacc;
                         results->accs++;
@@ -1163,7 +1207,7 @@ static enum search_ret thresh_decode_offsets(struct index *idx,
                         acc->acc.weight = 0.0;
                         /* METRIC_CONTRIB */
                         r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (avg_D_terms)) / avg_D_terms)) + f_dt));
-                        (acc->acc.weight) += r_dt * w_t * r_qt;
+                        (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
                         results->v_t = acc->acc.weight;
                         acc = *prevptr;
