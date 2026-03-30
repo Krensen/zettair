@@ -99,6 +99,8 @@ struct args {
     char * stop_file;
     char * qstop_file;
 
+    int output_json;             /* --output=json flag */
+
     int sopts;
     struct index_search_opt sopt;
     int aopts;
@@ -225,7 +227,8 @@ enum {
     OPT_IGNORE_VERSION,
     OPT_DIRICHLET, OPT_ANH_IMPACT, 
     OPT_TABLESIZE, OPT_PARSEBUF, OPT_BIG_AND_FAST, OPT_QUERYLIST,
-    OPT_DYNAMIC, OPT_DYNAMIC_PARAMS
+    OPT_DYNAMIC, OPT_DYNAMIC_PARAMS,
+    OPT_OUTPUT_JSON
 };
 
 static struct args *parse_args(unsigned int argc, char **argv, struct args *args, FILE *output, const char *path) {
@@ -288,6 +291,7 @@ static struct args *parse_args(unsigned int argc, char **argv, struct args *args
         {"dirichlet", '\0', GETLONGOPT_ARG_REQUIRED, OPT_DIRICHLET},
         {"metric", '\0', GETLONGOPT_ARG_REQUIRED, OPT_DYNAMIC},
         {"metric-parameters", '\0', GETLONGOPT_ARG_REQUIRED, OPT_DYNAMIC_PARAMS},
+        {"output", '\0', GETLONGOPT_ARG_REQUIRED, OPT_OUTPUT_JSON},
         {"accumulation-memory", '\0', GETLONGOPT_ARG_REQUIRED, OPT_ACCUMULATION_MEMORY},
         {"accumulation-docs", '\0', GETLONGOPT_ARG_REQUIRED, OPT_ACCUMULATION_DOCS},
         {"dump-memory", '\0', GETLONGOPT_ARG_REQUIRED, OPT_DUMP_MEMORY},
@@ -305,6 +309,7 @@ static struct args *parse_args(unsigned int argc, char **argv, struct args *args
 
     /* null out the others */
     args->results = 0;
+    args->output_json = 0;
     args->type = (char *)INDEX_DOCTYPE_ERR;
     args->prefix = NULL;
     args->config_file = NULL;
@@ -1036,6 +1041,14 @@ static struct args *parse_args(unsigned int argc, char **argv, struct args *args
             args->lopts |= INDEX_LOAD_IGNORE_VERSION;
             break;
 
+        case OPT_OUTPUT_JSON:
+            if (arg && strcmp(arg, "json") == 0) {
+                args->output_json = 1;
+            } else {
+                args->output_json = 0;
+            }
+            break;
+
         case OPT_ACCUMULATOR_LIMIT:
             /* set number of accumulators to use. */
             errno = 0;
@@ -1212,9 +1225,28 @@ static int is_cache_request(const char *querystr, unsigned int maxwordlen, unsig
     return 1;
 }
 
+/* Escape a string for JSON output — replace backslash, quote, and
+ * control characters with safe equivalents. Output is written to buf
+ * (which must be at least 2*srclen+1 bytes). Returns buf. */
+static char *json_escape(const char *src, char *buf, size_t bufsz) {
+    size_t i = 0, o = 0;
+    while (src[i] && o + 4 < bufsz) {
+        unsigned char c = (unsigned char)src[i++];
+        if (c == '\\') { buf[o++] = '\\'; buf[o++] = '\\'; }
+        else if (c == '"') { buf[o++] = '\\'; buf[o++] = '"'; }
+        else if (c == '\n') { buf[o++] = '\\'; buf[o++] = 'n'; }
+        else if (c == '\r') { buf[o++] = '\\'; buf[o++] = 'r'; }
+        else if (c == '\t') { buf[o++] = '\\'; buf[o++] = 't'; }
+        else if (c < 0x20) { /* skip other control chars */ }
+        else { buf[o++] = c; }
+    }
+    buf[o] = '\0';
+    return buf;
+}
+
 int search(struct index *idx, const char *query, struct index_result *result, 
   unsigned int requested, unsigned int start, unsigned int maxwordlen,
-  int opts, struct index_search_opt *opt) {
+  int opts, struct index_search_opt *opt, int output_json) {
     unsigned int results,                /* number of results */
                  i;
     double total_results;
@@ -1232,31 +1264,49 @@ int search(struct index *idx, const char *query, struct index_result *result,
             gettimeofday(&now, NULL);
             seconds = (double)((now.tv_sec - then.tv_sec) + (now.tv_usec - (double)then.tv_usec)/1000000.0);
 
-            for (i = 0; i < results; i++) {
-                fprintf(stdout, "%u. %s (score %f, docid %lu)\n",
-                      start + i + 1, result[i].auxilliary, result[i].score,
-                      result[i].docno);
-                
-                if (opt->summary_type != INDEX_SUMMARISE_NONE) {
-                    /* print out document summary and title */ 
-                    if (result[i].title[0] != '\0') {
-                        fprintf(stdout, "title: %s\n", 
-                          result[i].title);
-                    }
-                    if (result[i].summary[0] != '\0') {
-                        fprintf(stdout, "%s\n", result[i].summary);
-                    }
-                }              
-            }
-          
-            if (seconds == 0.0) {
-                fprintf(stdout, "\n%u results of %s%.0f shown\n", 
-                  i, est ? "about " : "", total_results);
+            if (output_json) {
+                /* JSON Lines output — one object per result */
+                char escbuf[4096];
+                for (i = 0; i < results; i++) {
+                    json_escape(result[i].auxilliary, escbuf, sizeof(escbuf));
+                    fprintf(stdout, "{\"rank\":%u,\"docno\":\"%s\",\"score\":%.2f,\"docid\":%lu}\n",
+                          start + i + 1, escbuf, result[i].score, result[i].docno);
+                }
+                /* sentinel */
+                fprintf(stdout, "{\"done\":true,\"count\":%u,\"total\":%.0f,\"took_ms\":%.2f}\n",
+                      results, total_results, seconds * 1000.0);
+                fflush(stdout);
             } else {
-                fprintf(stdout, "\n%u results of %s%.0f shown "
-                  "(took %f seconds)\n",
-                  i, est ? "about " : "", total_results, seconds);
+                for (i = 0; i < results; i++) {
+                    fprintf(stdout, "%u. %s (score %f, docid %lu)\n",
+                          start + i + 1, result[i].auxilliary, result[i].score,
+                          result[i].docno);
+                    
+                    if (opt->summary_type != INDEX_SUMMARISE_NONE) {
+                        /* print out document summary and title */ 
+                        if (result[i].title[0] != '\0') {
+                            fprintf(stdout, "title: %s\n", 
+                              result[i].title);
+                        }
+                        if (result[i].summary[0] != '\0') {
+                            fprintf(stdout, "%s\n", result[i].summary);
+                        }
+                    }              
+                }
+              
+                if (seconds == 0.0) {
+                    fprintf(stdout, "\n%u results of %s%.0f shown\n", 
+                      i, est ? "about " : "", total_results);
+                } else {
+                    fprintf(stdout, "\n%u results of %s%.0f shown "
+                      "(took %f seconds)\n",
+                      i, est ? "about " : "", total_results, seconds);
+                }
             }
+        } else if (output_json) {
+            /* search failed — emit empty sentinel so client doesn't hang */
+            fprintf(stdout, "{\"done\":true,\"count\":0,\"total\":0,\"took_ms\":0}\n");
+            fflush(stdout);
         }
     } else {
         int readlen;
@@ -1500,7 +1550,7 @@ int main(int argc, char **argv) {
                 for (i = 0; args->list && args->list[i]; i++) {
                     if (!(search(idx, args->list[i], results, args->results,
                       args->first_result, stats.maxtermlen, args->sopts,
-                      &args->sopt))) {
+                      &args->sopt, args->output_json))) {
                         index_delete(idx);
                         free_args(args);
                         return EXIT_FAILURE;
@@ -1512,13 +1562,13 @@ int main(int argc, char **argv) {
                     char querybuf[QUERYBUF + 1];
 
                     while (((args->qlist != stdin) 
-                        || (printf("> ") && (fflush(stdout) == 0)))
+                        || (fprintf(stderr, "> ") && (fflush(stderr) == 0)))
                       && fgets(querybuf, QUERYBUF, args->qlist)) {
                         querybuf[QUERYBUF] = '\0';
 
                         if (!(search(idx, querybuf, results, args->results, 
                           args->first_result, stats.maxtermlen, args->sopts, 
-                          &args->sopt))) {
+                          &args->sopt, args->output_json))) {
                             index_delete(idx);
                             free_args(args);
                             return EXIT_FAILURE;
@@ -1528,7 +1578,7 @@ int main(int argc, char **argv) {
 
                 gettimeofday(&now, NULL);
 
-                printf("%lu microseconds querying "
+                fprintf(stderr, "%lu microseconds querying "
                   "(excluding loading/unloading)\n", 
                   (unsigned long int) (now.tv_usec - then.tv_usec 
                     + (now.tv_sec - then.tv_sec) * 1000000));
