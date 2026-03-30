@@ -25,19 +25,87 @@ TREC_FILE  = os.path.join(SCRIPT_DIR, 'simplewiki.trec')
 STORE_FILE = os.path.join(SCRIPT_DIR, 'simplewiki.docstore')
 MAP_FILE   = os.path.join(SCRIPT_DIR, 'simplewiki.docmap')
 
-def strip_wiki_markup(text):
-    """Light cleanup — the TREC file is already mostly plain text from wiki2trec.py."""
-    # Remove any residual wiki templates {{...}}
-    text = re.sub(r'\{\{[^}]*\}\}', ' ', text)
-    # Remove image/file links [[File:...]] [[Image:...]]
-    text = re.sub(r'\[\[(File|Image):[^\]]*\]\]', ' ', text, flags=re.IGNORECASE)
-    # Remove remaining [[link|text]] → text, [[link]] → link
-    text = re.sub(r'\[\[(?:[^|\]]*\|)?([^\]]*)\]\]', r'\1', text)
-    # Remove bare URLs
-    text = re.sub(r'https?://\S+', ' ', text)
-    # Collapse multiple spaces/newlines
+# Simple, fast patterns — no backtracking risk.
+_RE_ISBN    = re.compile(r'ISBN(?:-1[03])?[\s:]*[\d][\d\-X]{8,16}')
+_RE_BULLET  = re.compile(r'\*\s+')   # bullet marker anywhere
+
+
+def _is_citation_sentence(sent: str) -> bool:
+    """
+    Return True if this sentence looks like a bibliographic citation rather
+    than prose.  We use cheap heuristics in priority order:
+
+    1. Contains an ISBN — dead giveaway.
+    2. Starts with a capitalised surname + comma pattern and contains a year:
+       "Perring, Dominic 1991."  "Dunwoodie, Lesley. 2015."
+       We only check the START of the sentence to avoid false positives on
+       prose like "In London, Ontario, the 2003 census..."
+    3. Ends with a publisher name pattern (University Press, Press, Ltd. etc.)
+       and is short (< 120 chars) — these are trailing reference fragments.
+    4. Predominantly non-alpha (< 40%) — coordinate strings, ISBNs without
+       the keyword, etc.
+    """
+    # 1. ISBN
+    if 'ISBN' in sent:
+        return True
+
+    # 2. Citation opener: Surname, Initial(s) YYYY  or  Surname, Name YYYY
+    #    Must be at the very start (stripped), and contain a 4-digit year.
+    if re.match(r'^[A-Z][a-zA-Z\-]+,\s+[A-Z]', sent):
+        if re.search(r'\b(19|20)\d{2}\b', sent):
+            return True
+
+    # 3. Short trailing publisher fragment
+    if len(sent) < 120 and re.search(
+            r'(?:University Press|Cambridge|Oxford|Routledge|Springer|'
+            r'Penguin|Bloomsbury|Harvard|Princeton|Yale|MIT Press)\s*\.',
+            sent):
+        return True
+
+    # 4. Alpha ratio
+    alpha = sum(1 for c in sent if c.isalpha())
+    if len(sent) > 15 and alpha / len(sent) < 0.40:
+        return True
+
+    return False
+
+
+def strip_wiki_markup(text: str) -> str:
+    """
+    Clean text that has already been through wiki2trec.py's clean() pass.
+    Strategy: split into sentences, drop citation sentences, rejoin.
+    This works on the flat single-line-per-article format wiki2trec produces.
+    """
+    # Strip bullet markers
+    text = _RE_BULLET.sub('', text)
+
+    # Remove raw ISBN blocks (the keyword + number, no surrounding sentence needed)
+    text = _RE_ISBN.sub('', text)
+
+    # Split on sentence boundaries: period/!/? followed by space + capital letter.
+    # Use re.split with a capturing group so we keep the delimiter characters.
+    parts = re.split(r'([.!?])\s+(?=[A-Z(])', text)
+
+    # re.split with a group interleaves [text, delim, text, delim, ...]
+    # Reassemble into sentences first.
+    sentences = []
+    i = 0
+    while i < len(parts):
+        seg = parts[i]
+        if i + 1 < len(parts) and parts[i+1] in '.!?':
+            seg = seg + parts[i+1]
+            i += 2
+        else:
+            i += 1
+        seg = seg.strip()
+        if seg:
+            sentences.append(seg)
+
+    # Filter out citation sentences
+    prose = [s for s in sentences if not _is_citation_sentence(s)]
+
+    text = ' '.join(prose)
     text = re.sub(r' {2,}', ' ', text)
-    text = re.sub(r'\n{3,}', '\n\n', text)
     return text.strip()
 
 def main():
