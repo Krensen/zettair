@@ -53,3 +53,5 @@ wikipedia/clickstream_state.json
 # Index files
 wikiindex/
 testindex/
+wikipedia/simplewiki.docstore
+wikipedia/simplewiki.docmap
