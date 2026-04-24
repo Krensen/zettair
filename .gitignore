@@ -33,7 +33,28 @@ devel/src/*.bak
 devel/src/.deps/
 devel/src/.dirstamp
 devel/src/include/stamp-h1
-devel/src/test/
+# test directory — track sources (.c, .cases) but not compiled binaries or objects
+devel/src/test/.deps/
+devel/src/test/.libs/
+devel/src/test/.dirstamp
+devel/src/test/*.o
+devel/src/test/binsearch_1
+devel/src/test/bit_1
+devel/src/test/bucket_1
+devel/src/test/docmap_1
+devel/src/test/freemap_1
+devel/src/test/getlongopt_1
+devel/src/test/heap_1
+devel/src/test/iobtree_1
+devel/src/test/ioutil_1
+devel/src/test/mem_1
+devel/src/test/mlparse_1
+devel/src/test/mlparse_2
+devel/src/test/poolalloc_1
+devel/src/test/rbtree_1
+devel/src/test/stack_1
+devel/src/test/stop_1
+devel/src/test/str_1
 devel/tools/.deps/
 devel/tools/.dirstamp
 

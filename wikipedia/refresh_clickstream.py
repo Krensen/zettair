@@ -37,6 +37,9 @@ WIKIMEDIA_BASE = 'https://dumps.wikimedia.org/other/clickstream'
 # ── Config ─────────────────────────────────────────────────────────────────
 DECAY_RATE = 0.85   # per month
 
+# Months to permanently skip (e.g. corrupt files)
+SKIP_MONTHS = {'2024-11'}
+
 SKIP_PREFIXES = (
     'List_of','Lists_of','Index_of','Outline_of','History_of',
     'Geography_of','Demographics_of','Wikipedia:','File:',
@@ -94,7 +97,7 @@ def all_available_months() -> list:
     months = []
     for fname in os.listdir(HERE):
         m = re.match(r'clickstream-enwiki-(\d{4}-\d{2})\.tsv\.gz', fname)
-        if m:
+        if m and m.group(1) not in SKIP_MONTHS:
             months.append(m.group(1))
     return sorted(months)
 
@@ -136,8 +139,13 @@ def is_blocked(query: str) -> bool:
         return True
     return bool(set(query.split()) & BLOCKLIST_WORDS)
 
+PARTIAL_FILE = os.path.join(HERE, 'autosuggest_partial.json')
+
 def build_autosuggest(months: list):
-    """Aggregate all months with decay, write autosuggest.json."""
+    """Aggregate all months with decay, write autosuggest.json.
+    Resumable: saves partial progress after each month so restarts continue
+    from where they left off rather than starting over.
+    """
     log('rebuild_start', months=len(months))
     t0 = time.time()
 
@@ -148,12 +156,38 @@ def build_autosuggest(months: list):
 
     # Reference = most recent month
     reference = sorted(months)[-1]
-    scores: dict = {}  # query -> float score
+
+    # Load partial progress if available
+    scores: dict = {}
+    completed_months: list = []
+    if os.path.exists(PARTIAL_FILE):
+        try:
+            with open(PARTIAL_FILE) as f:
+                partial = json.load(f)
+            if partial.get('reference') == reference:
+                scores = partial.get('scores', {})
+                completed_months = partial.get('completed_months', [])
+                log('resume', completed=len(completed_months), scores=len(scores))
+            else:
+                log('partial_stale', old_ref=partial.get('reference'), new_ref=reference)
+                import os as _os; _os.remove(PARTIAL_FILE)
+        except Exception as e:
+            log('partial_load_error', error=str(e))
 
     for month in sorted(months):
         fpath = os.path.join(HERE, f'clickstream-enwiki-{month}.tsv.gz')
         if not os.path.exists(fpath):
             log('skip_missing', month=month)
+            continue
+
+        # Skip permanently blacklisted months
+        if month in SKIP_MONTHS:
+            log('skip_blacklisted', month=month)
+            continue
+
+        # Skip months already processed in a previous run
+        if month in completed_months:
+            log('skip_cached', month=month)
             continue
 
         age = months_ago(month, reference)
@@ -196,6 +230,11 @@ def build_autosuggest(months: list):
 
         log('month_done', month=month, rows=rows)
 
+        # Save resumable checkpoint after each month
+        completed_months.append(month)
+        with open(PARTIAL_FILE, 'w') as pf:
+            json.dump({'reference': reference, 'scores': scores, 'completed_months': completed_months}, pf)
+
     # Sort alphabetically for binary search
     sorted_pairs = sorted(
         [(q, round(s)) for q, s in scores.items()],
@@ -204,6 +243,10 @@ def build_autosuggest(months: list):
 
     with open(OUTPUT, 'w', encoding='utf-8') as f:
         json.dump(sorted_pairs, f, ensure_ascii=False)
+
+    # Clean up partial checkpoint
+    if os.path.exists(PARTIAL_FILE):
+        os.remove(PARTIAL_FILE)
 
     size_mb = os.path.getsize(OUTPUT) / 1024 / 1024
     took = round(time.time() - t0, 1)
