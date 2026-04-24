@@ -60,6 +60,7 @@ devel/src/test/rbtree_1
 devel/src/test/stack_1
 devel/src/test/stop_1
 devel/src/test/str_1
+devel/tools/*.o
 devel/tools/.deps/
 devel/tools/.dirstamp
 
