@@ -25,7 +25,8 @@ devel/config.log
 devel/config.status
 devel/Makefile
 devel/setup.py
-devel/include
+devel/include/stamp-h1
+devel/include/config.h
 devel/.libs/
 devel/src/*.o
 devel/src/*.lo
