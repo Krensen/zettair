@@ -33,6 +33,10 @@ devel/src/*.lo
 devel/src/*.bak
 devel/src/.deps/
 devel/src/.dirstamp
+devel/src/libtextcodec/*.o
+devel/src/libtextcodec/*.lo
+devel/src/libtextcodec/.deps/
+devel/src/libtextcodec/.dirstamp
 devel/src/include/stamp-h1
 # test directory — track sources (.c, .cases) but not compiled binaries or objects
 devel/src/test/.deps/
