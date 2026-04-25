@@ -97,6 +97,8 @@ def print_report(results, total_articles):
 
 
 def plot_curve(sorted_articles, total, month, no_plot):
+    if no_plot:
+        return
     try:
         import matplotlib.pyplot as plt
         import matplotlib.ticker as mticker
