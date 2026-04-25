@@ -29,7 +29,7 @@ SERVICE_DIR  = os.path.join(HERE, '../../zettair-service')
 LOG_DIR      = os.path.join(SERVICE_DIR, 'logs')
 LOG_FILE     = os.path.join(LOG_DIR, 'clickstream_refresh.jsonl')
 STATE_FILE   = os.path.join(HERE, 'clickstream_state.json')
-TITLES_FILE  = os.path.join(HERE, 'simplewiki_titles.txt')
+TITLES_FILE  = os.path.join(HERE, 'enwiki_titles.txt')
 OUTPUT       = os.path.join(HERE, 'autosuggest.json')
 
 WIKIMEDIA_BASE = 'https://dumps.wikimedia.org/other/clickstream'
@@ -149,10 +149,10 @@ def build_autosuggest(months: list):
     log('rebuild_start', months=len(months))
     t0 = time.time()
 
-    # Load simplewiki titles
+    # Load indexed titles
     with open(TITLES_FILE) as f:
-        simplewiki = set(l.strip() for l in f if l.strip())
-    log('titles_loaded', count=len(simplewiki))
+        indexed_titles = set(l.strip() for l in f if l.strip())
+    log('titles_loaded', count=len(indexed_titles))
 
     # Reference = most recent month
     reference = sorted(months)[-1]
@@ -209,7 +209,7 @@ def build_autosuggest(months: list):
                     continue
                 if count < 10:
                     continue
-                if article not in simplewiki:
+                if article not in indexed_titles:
                     continue
                 if any(article.startswith(p) for p in SKIP_PREFIXES):
                     continue

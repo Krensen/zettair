@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-build_docstore.py — build a random-access document store from simplewiki.trec
+build_docstore.py — build a random-access document store from enwiki.trec
 
 Produces:
-  simplewiki.docstore   — raw concatenated plain text (UTF-8)
-  simplewiki.docmap     — JSON: {docno: [offset, length], ...}
+  enwiki.docstore   — raw concatenated plain text (UTF-8)
+  enwiki.docmap     — JSON: {docno: [offset, length], ...}
 
 The docstore contains one entry per article: just the plain text from <TEXT>...</TEXT>,
 with a single trailing newline. The docmap gives the byte offset and length so
@@ -21,9 +21,9 @@ import re
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-TREC_FILE  = os.path.join(SCRIPT_DIR, 'simplewiki.trec')
-STORE_FILE = os.path.join(SCRIPT_DIR, 'simplewiki.docstore')
-MAP_FILE   = os.path.join(SCRIPT_DIR, 'simplewiki.docmap')
+TREC_FILE  = os.path.join(SCRIPT_DIR, 'enwiki.trec')
+STORE_FILE = os.path.join(SCRIPT_DIR, 'enwiki.docstore')
+MAP_FILE   = os.path.join(SCRIPT_DIR, 'enwiki.docmap')
 
 # Simple, fast patterns — no backtracking risk.
 _RE_ISBN    = re.compile(r'ISBN(?:-1[03])?[\s:]*[\d][\d\-X]{8,16}')

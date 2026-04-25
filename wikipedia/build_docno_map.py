@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-build_docno_map.py — Extract title → internal docno mapping from simplewiki.trec
+build_docno_map.py — Extract title → internal docno mapping from enwiki.trec
 
 Zettair assigns docnos sequentially in the order documents appear in the TREC
 file. So docno 0 = first <DOCNO> tag, docno 1 = second, etc.
@@ -10,7 +10,7 @@ Output: docno_map.tsv  (two columns: internal_docno\ttitle)
 import os, re, sys
 
 HERE  = os.path.dirname(os.path.abspath(__file__))
-TREC  = os.path.join(HERE, 'simplewiki.trec')
+TREC  = os.path.join(HERE, 'enwiki.trec')
 OUT   = os.path.join(HERE, 'docno_map.tsv')
 
 DOCNO_RE = re.compile(r'<DOCNO>(.*?)</DOCNO>')

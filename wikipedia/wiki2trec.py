@@ -82,11 +82,20 @@ def safe_id(title):
     return re.sub(r'[^\w\-]', '_', title)[:80]
 
 def convert(xml_path, trec_path):
-    snippets = {}
-    images = {}
     count = skipped = img_count = 0
 
-    with open(trec_path, 'w', encoding='utf-8') as out:
+    snippets_path = trec_path.replace('.trec', '') + '_snippets.json'
+    images_path = trec_path.replace('.trec', '') + '_images.json'
+
+    with open(trec_path, 'w', encoding='utf-8') as out, \
+         open(snippets_path, 'w', encoding='utf-8') as snip_f, \
+         open(images_path, 'w', encoding='utf-8') as img_f:
+
+        snip_f.write('{')
+        img_f.write('{')
+        first_snip = True
+        first_img = True
+
         for event, elem in ET.iterparse(xml_path, events=('end',)):
             if elem.tag != f'{{{NS}}}page':
                 continue
@@ -116,13 +125,23 @@ def convert(xml_path, trec_path):
 
             docno = safe_id(title)
 
-            # Extract snippet from cleaned text
+            # Stream-write snippet entry
             snippet = extract_snippet(text)
-            snippets[docno] = snippet
+            entry = json.dumps(docno, ensure_ascii=False) + ':' + json.dumps(snippet, ensure_ascii=False)
+            if first_snip:
+                snip_f.write(entry)
+                first_snip = False
+            else:
+                snip_f.write(',' + entry)
 
-            # Store image if found
+            # Stream-write image entry if found
             if img_url:
-                images[docno] = img_url
+                img_entry = json.dumps(docno, ensure_ascii=False) + ':' + json.dumps(img_url, ensure_ascii=False)
+                if first_img:
+                    img_f.write(img_entry)
+                    first_img = False
+                else:
+                    img_f.write(',' + img_entry)
                 img_count += 1
 
             out.write(f'<DOC>\n<DOCNO>{docno}</DOCNO>\n<TEXT>\n{title}. {text}\n</TEXT>\n</DOC>\n')
@@ -130,27 +149,20 @@ def convert(xml_path, trec_path):
 
             if count % 5000 == 0:
                 out.flush()
-                print(f'  {count:,} articles... ({img_count:,} images, {count:,} snippets)', flush=True)
+                snip_f.flush()
+                img_f.flush()
+                print(f'  {count:,} articles... ({img_count:,} images)', flush=True)
 
             elem.clear()
 
-    # Write sidecar files
-    snippets_path = trec_path.replace('.trec', '') + '_snippets.json'
-    images_path = trec_path.replace('.trec', '') + '_images.json'
-
-    print(f'Writing {snippets_path}...', flush=True)
-    with open(snippets_path, 'w', encoding='utf-8') as f:
-        json.dump(snippets, f, ensure_ascii=False)
-
-    print(f'Writing {images_path}...', flush=True)
-    with open(images_path, 'w', encoding='utf-8') as f:
-        json.dump(images, f, ensure_ascii=False)
+        snip_f.write('}')
+        img_f.write('}')
 
     print(f'Done: {count:,} articles, {skipped:,} skipped, {img_count:,} images extracted.')
-    return count, len(snippets), img_count
+    return count, count, img_count
 
 if __name__ == '__main__':
-    xml_in  = sys.argv[1] if len(sys.argv) > 1 else 'simplewiki.xml'
-    trec_out = sys.argv[2] if len(sys.argv) > 2 else 'simplewiki.trec'
+    xml_in  = sys.argv[1] if len(sys.argv) > 1 else 'enwiki.xml'
+    trec_out = sys.argv[2] if len(sys.argv) > 2 else 'enwiki.trec'
     print(f'Converting {xml_in} → {trec_out}', flush=True)
     convert(xml_in, trec_out)

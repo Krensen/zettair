@@ -9,7 +9,7 @@ import json, os, re, sys, gzip
 HERE = os.path.dirname(os.path.abspath(__file__))
 
 CLICKSTREAM = os.path.join(HERE, 'clickstream-enwiki-2025-01.tsv.gz')
-TITLES_FILE = os.path.join(HERE, 'simplewiki_titles.txt')
+TITLES_FILE = os.path.join(HERE, 'enwiki_titles.txt')
 OUTPUT      = os.path.join(HERE, 'autosuggest.json')
 
 BLOCKLIST = {
@@ -46,11 +46,11 @@ def title_to_query(article):
     return q
 
 def main():
-    # Load simplewiki title set
-    print("Loading simplewiki titles...", flush=True)
+    # Load indexed title set
+    print("Loading indexed titles...", flush=True)
     with open(TITLES_FILE) as f:
-        simplewiki = set(l.strip() for l in f if l.strip())
-    print(f"  {len(simplewiki):,} titles", flush=True)
+        indexed_titles = set(l.strip() for l in f if l.strip())
+    print(f"  {len(indexed_titles):,} titles", flush=True)
 
     # Stream clickstream
     print("Processing clickstream...", flush=True)
@@ -79,7 +79,7 @@ def main():
                 continue
 
             # Must be in our index
-            if article not in simplewiki:
+            if article not in indexed_titles:
                 continue
             matched += 1
 
@@ -110,7 +110,7 @@ def main():
             if rows % 500000 == 0:
                 print(f"  {rows:,} rows processed, {matched:,} matched...", flush=True)
 
-    print(f"\nDone: {rows:,} rows | {matched:,} in simplewiki | "
+    print(f"\nDone: {rows:,} rows | {matched:,} in index | "
           f"{skipped:,} skipped | {blocked:,} blocked | "
           f"{len(results):,} unique queries", flush=True)
 
