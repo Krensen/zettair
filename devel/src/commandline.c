@@ -1267,10 +1267,12 @@ int search(struct index *idx, const char *query, struct index_result *result,
             if (output_json) {
                 /* JSON Lines output — one object per result */
                 char escbuf[4096];
+                char sumbuf[4096];
                 for (i = 0; i < results; i++) {
                     json_escape(result[i].auxilliary, escbuf, sizeof(escbuf));
-                    fprintf(stdout, "{\"rank\":%u,\"docno\":\"%s\",\"score\":%.2f,\"docid\":%lu}\n",
-                          start + i + 1, escbuf, result[i].score, result[i].docno);
+                    json_escape(result[i].summary, sumbuf, sizeof(sumbuf));
+                    fprintf(stdout, "{\"rank\":%u,\"docno\":\"%s\",\"score\":%.2f,\"docid\":%lu,\"summary\":\"%s\"}\n",
+                          start + i + 1, escbuf, result[i].score, result[i].docno, sumbuf);
                 }
                 /* sentinel */
                 fprintf(stdout, "{\"done\":true,\"count\":%u,\"total\":%.0f,\"took_ms\":%.2f}\n",
