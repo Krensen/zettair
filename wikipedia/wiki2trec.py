@@ -1,9 +1,14 @@
 #!/usr/bin/env python3
 """
 Fast Wikipedia XML → TREC converter for Zettair.
-Also outputs snippets.json and images.json sidecar files.
+Also outputs snippets and images flat-store sidecar files.
+
+Usage:
+  python3 wiki2trec.py input.xml output.trec
+  python3 wiki2trec.py input.xml.bz2 output.trec              # streams bz2 directly
+  python3 wiki2trec.py input.xml.bz2 output.trec --titles top_titles.txt
 """
-import sys, re, json, hashlib, xml.etree.ElementTree as ET
+import argparse, bz2, re, json, hashlib, xml.etree.ElementTree as ET
 
 NS = 'http://www.mediawiki.org/xml/export-0.11/'
 
@@ -22,12 +27,10 @@ def extract_image(raw):
     for m in re.finditer(r'\[\[(?:File|Image):([^\|\]\n]+)', raw, flags=re.I):
         fn = m.group(1).strip()
         fn_lower = fn.lower()
-        # Skip decorative images
         if any(skip in fn_lower for skip in IMAGE_SKIP):
             continue
         if any(fn_lower.endswith(ext) for ext in IMAGE_SKIP_EXT):
             continue
-        # Must end in an image extension
         if not any(fn_lower.endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp')):
             continue
         return wiki_image_url(fn)
@@ -35,17 +38,14 @@ def extract_image(raw):
 
 def extract_snippet(text):
     """Extract first 2-3 clean sentences, 300-500 chars, never cut mid-sentence."""
-    # Split on sentence boundaries
     sentences = re.split(r'(?<=[.!?]) (?=[A-Z])', text)
     snippet = ''
     for s in sentences:
         s = s.strip()
         if not s:
             continue
-        # Skip sentences that look like image captions (short, end with ]])
         if s.endswith(']]') or s.startswith('|') or len(s) < 20:
             continue
-        # Skip sentences that still have template artifacts
         if '{{' in s or '}}' in s or '[[' in s:
             continue
         candidate = (snippet + ' ' + s).strip() if snippet else s
@@ -63,7 +63,6 @@ def clean(text):
         t = re.sub(r'\{\{[^{}]*\}\}', '', text)
         if t == text: break
         text = t
-    # Remove File/Image blocks including caption text before the closing ]]
     text = re.sub(r'\[\[(?:File|Image):[^\]]*\]\]', '', text, flags=re.I)
     text = re.sub(r'\[\[(Category):[^\]]*\]\]', '', text, flags=re.I)
     text = re.sub(r'\[\[(?:[^|\]]*\|)?([^\]]+)\]\]', r'\1', text)
@@ -73,7 +72,6 @@ def clean(text):
     text = re.sub(r'={2,6}[^=]+=+', ' ', text)
     text = re.sub(r'<[^>]+>', ' ', text)
     text = re.sub(r'&[a-z#]+;', ' ', text)
-    # Remove any remaining ]] or [[ fragments
     text = re.sub(r'\]\]|\[\[', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
@@ -81,24 +79,42 @@ def clean(text):
 def safe_id(title):
     return re.sub(r'[^\w\-]', '_', title)[:80]
 
-def convert(xml_path, trec_path):
+def title_to_dbkey(title):
+    """Convert display title to dbkey form for allowlist lookup."""
+    return title.replace(' ', '_')
+
+def load_titles(path):
+    """Load allowlist from file, return as a set of dbkey strings."""
+    with open(path, encoding='utf-8') as f:
+        titles = {line.strip() for line in f if line.strip()}
+    print(f'Loaded {len(titles):,} titles from allowlist', flush=True)
+    return titles
+
+def convert(xml_path, trec_path, titles=None):
     base = trec_path.replace('.trec', '')
     snip_store_path = base + '_snippets.store'
     snip_map_path   = base + '_snippets.map'
     img_store_path  = base + '_images.store'
     img_map_path    = base + '_images.map'
 
-    count = skipped = img_count = 0
+    count = skipped = filtered = img_count = 0
     snip_map = {}
     img_map  = {}
     snip_offset = 0
     img_offset  = 0
 
-    with open(trec_path, 'w', encoding='utf-8') as out, \
+    # Stream bz2 or plain XML
+    if xml_path.endswith('.bz2'):
+        fh = bz2.open(xml_path, 'rb')
+    else:
+        fh = open(xml_path, 'rb')
+
+    with fh, \
+         open(trec_path, 'w', encoding='utf-8') as out, \
          open(snip_store_path, 'wb') as snip_store, \
          open(img_store_path,  'wb') as img_store:
 
-        for event, elem in ET.iterparse(xml_path, events=('end',)):
+        for event, elem in ET.iterparse(fh, events=('end',)):
             if elem.tag != f'{{{NS}}}page':
                 continue
             ns_el = elem.find(f'{{{NS}}}ns')
@@ -118,7 +134,10 @@ def convert(xml_path, trec_path):
             if raw.lstrip().lower().startswith('#redirect'):
                 elem.clear(); skipped += 1; continue
 
-            # Extract image from raw wikitext (before cleaning)
+            # Apply title allowlist if provided
+            if titles is not None and title_to_dbkey(title) not in titles:
+                elem.clear(); filtered += 1; continue
+
             img_url = extract_image(raw)
 
             text = clean(raw)
@@ -127,14 +146,12 @@ def convert(xml_path, trec_path):
 
             docno = safe_id(title)
 
-            # Write snippet to flat store
             snippet = extract_snippet(text)
             encoded = snippet.encode('utf-8')
             snip_map[docno] = [snip_offset, len(encoded)]
             snip_store.write(encoded)
             snip_offset += len(encoded)
 
-            # Write image URL to flat store if found
             if img_url:
                 encoded_img = img_url.encode('utf-8')
                 img_map[docno] = [img_offset, len(encoded_img)]
@@ -145,11 +162,11 @@ def convert(xml_path, trec_path):
             out.write(f'<DOC>\n<DOCNO>{docno}</DOCNO>\n<TEXT>\n{title}. {text}\n</TEXT>\n</DOC>\n')
             count += 1
 
-            if count % 5000 == 0:
+            if count % 10000 == 0:
                 out.flush()
                 snip_store.flush()
                 img_store.flush()
-                print(f'  {count:,} articles... ({img_count:,} images)', flush=True)
+                print(f'  {count:,} articles written ({img_count:,} images, {filtered:,} filtered out)...', flush=True)
 
             elem.clear()
 
@@ -161,11 +178,26 @@ def convert(xml_path, trec_path):
     with open(img_map_path, 'w', encoding='utf-8') as f:
         json.dump(img_map, f, separators=(',', ':'))
 
-    print(f'Done: {count:,} articles, {skipped:,} skipped, {img_count:,} images extracted.')
+    if titles is not None:
+        matched_pct = 100 * count / len(titles) if titles else 0
+        print(f'Allowlist match: {count:,} of {len(titles):,} titles found in dump ({matched_pct:.1f}%)', flush=True)
+        if count < len(titles) * 0.8:
+            print(f'WARNING: fewer than 80% of allowlist titles matched — check title normalisation', flush=True)
+
+    print(f'Done: {count:,} articles written, {skipped:,} skipped, {filtered:,} filtered, {img_count:,} images.')
     return count, count, img_count
 
 if __name__ == '__main__':
-    xml_in  = sys.argv[1] if len(sys.argv) > 1 else 'enwiki.xml'
-    trec_out = sys.argv[2] if len(sys.argv) > 2 else 'enwiki.trec'
-    print(f'Converting {xml_in} → {trec_out}', flush=True)
-    convert(xml_in, trec_out)
+    parser = argparse.ArgumentParser(description=__doc__,
+                                     formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument('xml_in',  nargs='?', default='enwiki.xml')
+    parser.add_argument('trec_out', nargs='?', default='enwiki.trec')
+    parser.add_argument('--titles', default=None,
+                        help='Path to allowlist file (one title per line, dbkey form)')
+    args = parser.parse_args()
+
+    titles = load_titles(args.titles) if args.titles else None
+    print(f'Converting {args.xml_in} → {args.trec_out}', flush=True)
+    if titles:
+        print(f'Allowlist: {len(titles):,} titles', flush=True)
+    convert(args.xml_in, args.trec_out, titles)
