@@ -21,9 +21,10 @@ import re
 import time
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
-TREC_FILE  = os.path.join(SCRIPT_DIR, 'enwiki.trec')
-STORE_FILE = os.path.join(SCRIPT_DIR, 'enwiki.docstore')
-MAP_FILE   = os.path.join(SCRIPT_DIR, 'enwiki.docmap')
+_default   = os.path.join(SCRIPT_DIR, 'enwiki.trec')
+TREC_FILE  = sys.argv[1] if len(sys.argv) > 1 else _default
+STORE_FILE = TREC_FILE.replace('.trec', '.docstore')
+MAP_FILE   = TREC_FILE.replace('.trec', '.docmap')
 
 # Simple, fast patterns — no backtracking risk.
 _RE_ISBN    = re.compile(r'ISBN(?:-1[03])?[\s:]*[\d][\d\-X]{8,16}')

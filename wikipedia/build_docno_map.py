@@ -1,16 +1,19 @@
 #!/usr/bin/env python3
 """
-build_docno_map.py — Extract title → internal docno mapping from enwiki.trec
+build_docno_map.py — Extract title → internal docno mapping from a TREC file.
 
 Zettair assigns docnos sequentially in the order documents appear in the TREC
 file. So docno 0 = first <DOCNO> tag, docno 1 = second, etc.
+
+Usage:
+  python3 build_docno_map.py [input.trec]   (default: enwiki.trec)
 
 Output: docno_map.tsv  (two columns: internal_docno\ttitle)
 """
 import os, re, sys
 
 HERE  = os.path.dirname(os.path.abspath(__file__))
-TREC  = os.path.join(HERE, 'enwiki.trec')
+TREC  = sys.argv[1] if len(sys.argv) > 1 else os.path.join(HERE, 'enwiki.trec')
 OUT   = os.path.join(HERE, 'docno_map.tsv')
 
 DOCNO_RE = re.compile(r'<DOCNO>(.*?)</DOCNO>')
