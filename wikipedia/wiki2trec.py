@@ -82,19 +82,21 @@ def safe_id(title):
     return re.sub(r'[^\w\-]', '_', title)[:80]
 
 def convert(xml_path, trec_path):
-    count = skipped = img_count = 0
+    base = trec_path.replace('.trec', '')
+    snip_store_path = base + '_snippets.store'
+    snip_map_path   = base + '_snippets.map'
+    img_store_path  = base + '_images.store'
+    img_map_path    = base + '_images.map'
 
-    snippets_path = trec_path.replace('.trec', '') + '_snippets.json'
-    images_path = trec_path.replace('.trec', '') + '_images.json'
+    count = skipped = img_count = 0
+    snip_map = {}
+    img_map  = {}
+    snip_offset = 0
+    img_offset  = 0
 
     with open(trec_path, 'w', encoding='utf-8') as out, \
-         open(snippets_path, 'w', encoding='utf-8') as snip_f, \
-         open(images_path, 'w', encoding='utf-8') as img_f:
-
-        snip_f.write('{')
-        img_f.write('{')
-        first_snip = True
-        first_img = True
+         open(snip_store_path, 'wb') as snip_store, \
+         open(img_store_path,  'wb') as img_store:
 
         for event, elem in ET.iterparse(xml_path, events=('end',)):
             if elem.tag != f'{{{NS}}}page':
@@ -125,23 +127,19 @@ def convert(xml_path, trec_path):
 
             docno = safe_id(title)
 
-            # Stream-write snippet entry
+            # Write snippet to flat store
             snippet = extract_snippet(text)
-            entry = json.dumps(docno, ensure_ascii=False) + ':' + json.dumps(snippet, ensure_ascii=False)
-            if first_snip:
-                snip_f.write(entry)
-                first_snip = False
-            else:
-                snip_f.write(',' + entry)
+            encoded = snippet.encode('utf-8')
+            snip_map[docno] = [snip_offset, len(encoded)]
+            snip_store.write(encoded)
+            snip_offset += len(encoded)
 
-            # Stream-write image entry if found
+            # Write image URL to flat store if found
             if img_url:
-                img_entry = json.dumps(docno, ensure_ascii=False) + ':' + json.dumps(img_url, ensure_ascii=False)
-                if first_img:
-                    img_f.write(img_entry)
-                    first_img = False
-                else:
-                    img_f.write(',' + img_entry)
+                encoded_img = img_url.encode('utf-8')
+                img_map[docno] = [img_offset, len(encoded_img)]
+                img_store.write(encoded_img)
+                img_offset += len(encoded_img)
                 img_count += 1
 
             out.write(f'<DOC>\n<DOCNO>{docno}</DOCNO>\n<TEXT>\n{title}. {text}\n</TEXT>\n</DOC>\n')
@@ -149,14 +147,19 @@ def convert(xml_path, trec_path):
 
             if count % 5000 == 0:
                 out.flush()
-                snip_f.flush()
-                img_f.flush()
+                snip_store.flush()
+                img_store.flush()
                 print(f'  {count:,} articles... ({img_count:,} images)', flush=True)
 
             elem.clear()
 
-        snip_f.write('}')
-        img_f.write('}')
+    print(f'Writing {snip_map_path}...', flush=True)
+    with open(snip_map_path, 'w', encoding='utf-8') as f:
+        json.dump(snip_map, f, separators=(',', ':'))
+
+    print(f'Writing {img_map_path}...', flush=True)
+    with open(img_map_path, 'w', encoding='utf-8') as f:
+        json.dump(img_map, f, separators=(',', ':'))
 
     print(f'Done: {count:,} articles, {skipped:,} skipped, {img_count:,} images extracted.')
     return count, count, img_count
