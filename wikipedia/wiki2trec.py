@@ -96,8 +96,9 @@ def convert(xml_path, trec_path, titles=None):
     snip_map_path   = base + '_snippets.map'
     img_store_path  = base + '_images.store'
     img_map_path    = base + '_images.map'
+    dbkeys_path     = base + '.dbkeys.tsv'
 
-    count = skipped = filtered = img_count = 0
+    count = skipped = filtered = img_count = dbkey_remap = 0
     snip_map = {}
     img_map  = {}
     snip_offset = 0
@@ -112,7 +113,8 @@ def convert(xml_path, trec_path, titles=None):
     with fh, \
          open(trec_path, 'w', encoding='utf-8') as out, \
          open(snip_store_path, 'wb') as snip_store, \
-         open(img_store_path,  'wb') as img_store:
+         open(img_store_path,  'wb') as img_store, \
+         open(dbkeys_path, 'w', encoding='utf-8') as dbkeys:
 
         for event, elem in ET.iterparse(fh, events=('end',)):
             if elem.tag != f'{{{NS}}}page':
@@ -145,6 +147,10 @@ def convert(xml_path, trec_path, titles=None):
                 elem.clear(); skipped += 1; continue
 
             docno = safe_id(title)
+            dbkey = title_to_dbkey(title)
+            if dbkey != docno:
+                dbkeys.write(f'{docno}\t{dbkey}\n')
+                dbkey_remap += 1
 
             snippet = extract_snippet(text)
             encoded = snippet.encode('utf-8')
@@ -184,7 +190,7 @@ def convert(xml_path, trec_path, titles=None):
         if count < len(titles) * 0.8:
             print(f'WARNING: fewer than 80% of allowlist titles matched — check title normalisation', flush=True)
 
-    print(f'Done: {count:,} articles written, {skipped:,} skipped, {filtered:,} filtered, {img_count:,} images.')
+    print(f'Done: {count:,} articles written, {skipped:,} skipped, {filtered:,} filtered, {img_count:,} images, {dbkey_remap:,} dbkey remaps.')
     return count, count, img_count
 
 if __name__ == '__main__':
