@@ -90,19 +90,25 @@ def load_titles(path):
     print(f'Loaded {len(titles):,} titles from allowlist', flush=True)
     return titles
 
+URL_PREFIX = 'https://en.wikipedia.org/wiki/'
+
+
 def convert(xml_path, trec_path, titles=None):
     base = trec_path.replace('.trec', '')
     snip_store_path = base + '_snippets.store'
     snip_map_path   = base + '_snippets.map'
     img_store_path  = base + '_images.store'
     img_map_path    = base + '_images.map'
-    dbkeys_path     = base + '.dbkeys.tsv'
+    url_store_path  = base + '_urls.store'
+    url_map_path    = base + '_urls.map'
 
-    count = skipped = filtered = img_count = dbkey_remap = 0
+    count = skipped = filtered = img_count = url_count = 0
     snip_map = {}
     img_map  = {}
+    url_map  = {}
     snip_offset = 0
     img_offset  = 0
+    url_offset  = 0
 
     # Stream bz2 or plain XML
     if xml_path.endswith('.bz2'):
@@ -114,7 +120,7 @@ def convert(xml_path, trec_path, titles=None):
          open(trec_path, 'w', encoding='utf-8') as out, \
          open(snip_store_path, 'wb') as snip_store, \
          open(img_store_path,  'wb') as img_store, \
-         open(dbkeys_path, 'w', encoding='utf-8') as dbkeys:
+         open(url_store_path,  'wb') as url_store:
 
         for event, elem in ET.iterparse(fh, events=('end',)):
             if elem.tag != f'{{{NS}}}page':
@@ -148,9 +154,15 @@ def convert(xml_path, trec_path, titles=None):
 
             docno = safe_id(title)
             dbkey = title_to_dbkey(title)
+            # Only store the URL when the dbkey form differs from the safe_id —
+            # for the 77% of articles where they match, server.py constructs
+            # the URL on the fly from the docno.
             if dbkey != docno:
-                dbkeys.write(f'{docno}\t{dbkey}\n')
-                dbkey_remap += 1
+                encoded_url = (URL_PREFIX + dbkey).encode('utf-8')
+                url_map[docno] = [url_offset, len(encoded_url)]
+                url_store.write(encoded_url)
+                url_offset += len(encoded_url)
+                url_count += 1
 
             snippet = extract_snippet(text)
             encoded = snippet.encode('utf-8')
@@ -184,13 +196,17 @@ def convert(xml_path, trec_path, titles=None):
     with open(img_map_path, 'w', encoding='utf-8') as f:
         json.dump(img_map, f, separators=(',', ':'))
 
+    print(f'Writing {url_map_path}...', flush=True)
+    with open(url_map_path, 'w', encoding='utf-8') as f:
+        json.dump(url_map, f, separators=(',', ':'))
+
     if titles is not None:
         matched_pct = 100 * count / len(titles) if titles else 0
         print(f'Allowlist match: {count:,} of {len(titles):,} titles found in dump ({matched_pct:.1f}%)', flush=True)
         if count < len(titles) * 0.8:
             print(f'WARNING: fewer than 80% of allowlist titles matched — check title normalisation', flush=True)
 
-    print(f'Done: {count:,} articles written, {skipped:,} skipped, {filtered:,} filtered, {img_count:,} images, {dbkey_remap:,} dbkey remaps.')
+    print(f'Done: {count:,} articles written, {skipped:,} skipped, {filtered:,} filtered, {img_count:,} images, {url_count:,} URLs.')
     return count, count, img_count
 
 if __name__ == '__main__':
