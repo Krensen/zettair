@@ -1385,10 +1385,10 @@ int index_add(struct index *idx, const char *file, const char *mimetype,
                      *mi = NULL;
     int infd = -1,
         outfd;
-    unsigned int i,
-                 bytes_read = 0,
-                 last_pos = 0,
-                 curr_pos = 0;
+    unsigned int i;
+    off_t bytes_read = 0,
+          last_pos = 0,
+          curr_pos = 0;
     ssize_t readlen;
     enum makeindex_ret miret;
     unsigned int accbuf = idx->params.memory,

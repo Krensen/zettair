@@ -31,7 +31,7 @@ struct fdset;
 struct docmap_entry {
     unsigned int docno;               /* doc number */
     unsigned int fileno;              /* repository file number */
-    unsigned int offset;              /* offset within repository file */
+    off_t offset;                     /* offset within repository file (64-bit, supports >4GB TREC) */
     unsigned int dwords;              /* number of distinct words in doc */
     unsigned int words;               /* number of words in doc */
     double weight;                     /* the cosine weight of the doc */
