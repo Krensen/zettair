@@ -177,7 +177,11 @@ def convert(xml_path, trec_path, titles=None):
                 img_offset += len(encoded_img)
                 img_count += 1
 
-            out.write(f'<DOC>\n<DOCNO>{docno}</DOCNO>\n<TEXT>\n{title}. {text}\n</TEXT>\n</DOC>\n')
+            # Title appears at the start (so the summariser sees prose first)
+            # plus 4× at the end as a BM25 boost. With BM25's k1=1.2 saturation,
+            # 5× total repetition is roughly equivalent to a 3× field boost in
+            # BM25F. Workaround until PRD-017 ships real per-field weighting.
+            out.write(f'<DOC>\n<DOCNO>{docno}</DOCNO>\n<TEXT>\n{title}. {text}\n{title}. {title}. {title}. {title}.\n</TEXT>\n</DOC>\n')
             count += 1
 
             if count % 10000 == 0:
