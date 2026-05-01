@@ -54,8 +54,34 @@ enum psettings_attr {
     PSETTINGS_ATTR_FLOW = (1 << 7),     /* this attribute indicates that text 
                                          * can continue to flow 'through' the 
                                          * tag */
-    PSETTINGS_ATTR_TITLE = (1 << 8)     /* indicates the start of a title */
+    PSETTINGS_ATTR_TITLE = (1 << 8),    /* indicates the start of a title */
+    PSETTINGS_ATTR_CAPTION = (1 << 9),  /* (reserved) image caption field */
+    PSETTINGS_ATTR_CATEGORY = (1 << 10),/* (reserved) category list field */
+    PSETTINGS_ATTR_SEEALSO = (1 << 11), /* (reserved) see-also field */
+    PSETTINGS_ATTR_INFOBOX = (1 << 12)  /* (reserved) infobox content field */
 };
+
+/* PRD-017: per-occurrence field tagging for field-weighted retrieval.
+ *
+ * Each tag-attribute bit listed below maps to a small integer "field_id"
+ * stored in the low bits of every encoded posting offset. The BM25 scorer
+ * decodes the field_id and applies a per-field boost (ZET_BOOST_TITLE etc).
+ *
+ * Field 0 is implicit (anything not inside a recognised field tag = body).
+ * Up to 16 field IDs are supported (POSTINGS_FIELD_BITS in postings.h).
+ *
+ * Adding a new field is: define PSETTINGS_ATTR_X above, add a case here,
+ * register the tag in psettings_default.c, emit it from wiki2trec.py, and
+ * ship a ZET_BOOST_X env var. No format change needed — IDs 2-15 are
+ * reserved in the encoding from day one. */
+static inline unsigned int psettings_field_id(unsigned int attr) {
+    if (attr & PSETTINGS_ATTR_TITLE)    return 1;
+    if (attr & PSETTINGS_ATTR_CAPTION)  return 2;
+    if (attr & PSETTINGS_ATTR_CATEGORY) return 3;
+    if (attr & PSETTINGS_ATTR_SEEALSO)  return 4;
+    if (attr & PSETTINGS_ATTR_INFOBOX)  return 5;
+    return 0;  /* body */
+}
 
 enum psettings_ret {
     PSETTINGS_OK = 0,

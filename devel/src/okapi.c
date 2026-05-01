@@ -26,6 +26,7 @@
 
 #include "zettair.h"
 
+#include "postings.h"
 #include "search.h"
 #include "str.h"
 #include <math.h>
@@ -36,6 +37,42 @@
 static float        *g_click_prior     = NULL;
 static unsigned int  g_click_prior_len = 0;
 static double        g_click_alpha     = 0.3;
+
+/* ── PRD-017: per-field BM25 boost ───────────────────────────────────────
+ * Each posting offset has its field_id in the low POSTINGS_FIELD_BITS bits.
+ * At score time, weighted_f_dt = sum over occurrences of g_field_boost[fid].
+ * Body (field 0) defaults to 1.0; other fields default to 1.0 too (no boost)
+ * unless overridden by ZET_BOOST_TITLE etc. env vars at startup. */
+static double g_field_boost[POSTINGS_MAX_FIELDS] = {
+    1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+    1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+};
+static int g_field_boost_loaded = 0;
+
+void okapi_load_field_boosts(void) {
+    static const struct { const char *name; unsigned int field; } envs[] = {
+        {"ZET_BOOST_TITLE",    1},
+        {"ZET_BOOST_CAPTION",  2},
+        {"ZET_BOOST_CATEGORY", 3},
+        {"ZET_BOOST_SEEALSO",  4},
+        {"ZET_BOOST_INFOBOX",  5},
+    };
+    unsigned int i;
+    if (g_field_boost_loaded) return;
+    for (i = 0; i < sizeof(envs) / sizeof(envs[0]); i++) {
+        const char *v = getenv(envs[i].name);
+        if (v && *v) {
+            char *end = NULL;
+            double d = strtod(v, &end);
+            if (end != v && d > 0.0) {
+                g_field_boost[envs[i].field] = d;
+                fprintf(stderr, "[field_boost] %s = %.2f (field_id=%u)\n",
+                        envs[i].name, d, envs[i].field);
+            }
+        }
+    }
+    g_field_boost_loaded = 1;
+}
 
 void okapi_load_prior(const char *path, double alpha) {
     FILE *f = fopen(path, "rb");
@@ -241,6 +278,36 @@ static enum search_ret post(struct index *idx, struct query *query, struct searc
             }                                                                 \
         } while (toscan);                                                     \
     } while (0)
+
+/* PRD-017: read f_dt offsets, decode the field_id in the low
+ * POSTINGS_FIELD_BITS bits of each, and accumulate a weighted sum into
+ * (weighted) instead of f_dt.  This replaces SCAN_OFFSETS in the okapi
+ * scoring loops so that title (and future field) hits count more.
+ *
+ * weighted is a double accumulator; toread is a counter; v is the vec*. */
+#define READ_OFFSETS_WEIGHTED(src, v, f_dt, weighted)                         \
+    do {                                                                      \
+        unsigned int toread = f_dt;                                           \
+        unsigned long int enc;                                                \
+        enum search_ret sret;                                                 \
+        (weighted) = 0.0;                                                     \
+        while (toread) {                                                      \
+            if (vec_vbyte_read((v), &enc)) {                                  \
+                (weighted) += g_field_boost[enc & POSTINGS_FIELD_MASK];       \
+                toread--;                                                     \
+            } else {                                                          \
+                /* need more data */                                          \
+                if ((sret = src->read(src, VEC_LEN(v),                        \
+                    (void **) &(v)->pos, &bytes)) == SEARCH_OK) {             \
+                    (v)->end = (v)->pos + bytes;                              \
+                } else if (sret == SEARCH_FINISH) {                           \
+                    return SEARCH_EINVAL;                                     \
+                } else {                                                      \
+                    return sret;                                              \
+                }                                                             \
+            }                                                                 \
+        }                                                                     \
+    } while (0)
  
 static enum search_ret or_decode(struct index *idx, struct query *query, 
   unsigned int qterm, unsigned long int docno, 
@@ -261,6 +328,7 @@ static enum search_ret or_decode(struct index *idx, struct query *query,
     double avg_D_terms;
     double w_t;
     double r_dt;
+    double weighted_f_dt;          /* PRD-017: field-boosted f_dt */
 
     double r_qt = (((param->k3) + 1) * (query->term[qterm].f_qt)) / ((param->k3) + (query->term[qterm].f_qt));
     if (docmap_avg_words(idx->map, &avg_D_terms) != DOCMAP_OK) {
@@ -281,6 +349,7 @@ static enum search_ret or_decode(struct index *idx, struct query *query,
 
     while (1) {
         while (NEXT_DOC(&v, docno, f_dt)) {
+            weighted_f_dt = (double)f_dt;  /* PRD-017: no offsets here, equal weight */
 
             /* merge into accumulator list */
             while (acc && (docno > acc->acc.docno)) {
@@ -290,7 +359,7 @@ static enum search_ret or_decode(struct index *idx, struct query *query,
 
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
-                r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
+                r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
                 (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
             } else {
@@ -306,7 +375,7 @@ static enum search_ret or_decode(struct index *idx, struct query *query,
                 acc->acc.docno = docno;
                 acc->acc.weight = 0.0;
                 /* METRIC_PER_DOC */
-                r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
+                r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
                 (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
                 *prevptr = newacc;
@@ -342,8 +411,8 @@ static enum search_ret or_decode(struct index *idx, struct query *query,
 }
  
 static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
-  unsigned int qterm, unsigned long int docno, 
-  struct search_metric_results *results, struct search_list_src *src, 
+  unsigned int qterm, unsigned long int docno,
+  struct search_metric_results *results, struct search_list_src *src,
   int opts, struct index_search_opt *opt) {
     /* METRIC_STRUCT */ struct okapi_param *param = (void *) &opt->u;
     struct search_acc_cons *acc = results->acc,
@@ -360,6 +429,7 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
     double avg_D_terms;
     double w_t;
     double r_dt;
+    double weighted_f_dt;          /* PRD-017: field-boosted f_dt */
 
     double r_qt = (((param->k3) + 1) * (query->term[qterm].f_qt)) / ((param->k3) + (query->term[qterm].f_qt));
     if (docmap_avg_words(idx->map, &avg_D_terms) != DOCMAP_OK) {
@@ -380,7 +450,7 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
 
     while (1) {
         while (NEXT_DOC(&v, docno, f_dt)) {
-            SCAN_OFFSETS(src, &v, f_dt);
+            READ_OFFSETS_WEIGHTED(src, &v, f_dt, weighted_f_dt);
 
             /* merge into accumulator list */
             while (acc && (docno > acc->acc.docno)) {
@@ -390,7 +460,7 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
 
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
-                r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
+                r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
                 (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
             } else {
@@ -406,7 +476,7 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
                 acc->acc.docno = docno;
                 acc->acc.weight = 0.0;
                 /* METRIC_PER_DOC */
-                r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
+                r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
                 (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
                 *prevptr = newacc;
@@ -464,6 +534,7 @@ static enum search_ret and_decode(struct index *idx, struct query *query,
     double avg_D_terms;
     double w_t;
     double r_dt;
+    double weighted_f_dt;          /* PRD-017: field-boosted f_dt */
 
     double r_qt = (((param->k3) + 1) * (query->term[qterm].f_qt)) / ((param->k3) + (query->term[qterm].f_qt));
     if (docmap_avg_words(idx->map, &avg_D_terms) != DOCMAP_OK) {
@@ -485,6 +556,7 @@ static enum search_ret and_decode(struct index *idx, struct query *query,
     while (1) {
         while (NEXT_DOC(&v, docno, f_dt)) {
             decoded++;
+            weighted_f_dt = (double)f_dt;  /* PRD-017: no offsets here, equal weight */
 
             /* merge into accumulator list */
             while (acc && (docno > acc->acc.docno)) {
@@ -493,7 +565,7 @@ static enum search_ret and_decode(struct index *idx, struct query *query,
 
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
-                r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
+                r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
                 (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
 
@@ -575,6 +647,7 @@ static enum search_ret and_decode_offsets(struct index *idx,
     double avg_D_terms;
     double w_t;
     double r_dt;
+    double weighted_f_dt;          /* PRD-017: field-boosted f_dt */
 
     double r_qt = (((param->k3) + 1) * (query->term[qterm].f_qt)) / ((param->k3) + (query->term[qterm].f_qt));
     if (docmap_avg_words(idx->map, &avg_D_terms) != DOCMAP_OK) {
@@ -595,7 +668,7 @@ static enum search_ret and_decode_offsets(struct index *idx,
 
     while (1) {
         while (NEXT_DOC(&v, docno, f_dt)) {
-            SCAN_OFFSETS(src, &v, f_dt);
+            READ_OFFSETS_WEIGHTED(src, &v, f_dt, weighted_f_dt);
             decoded++;
 
             /* merge into accumulator list */
@@ -605,7 +678,7 @@ static enum search_ret and_decode_offsets(struct index *idx,
 
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
-                r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
+                r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
                 (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
 
@@ -702,6 +775,7 @@ static enum search_ret thresh_decode(struct index *idx, struct query *query,
     double avg_D_terms;
     double w_t;
     double r_dt;
+    double weighted_f_dt;          /* PRD-017: field-boosted f_dt */
 
     double r_qt = (((param->k3) + 1) * (query->term[qterm].f_qt)) / ((param->k3) + (query->term[qterm].f_qt));
     if (docmap_avg_words(idx->map, &avg_D_terms) != DOCMAP_OK) {
@@ -798,6 +872,7 @@ static enum search_ret thresh_decode(struct index *idx, struct query *query,
     while (1) {
         while (NEXT_DOC(&v, docno, f_dt)) {
             decoded++;
+            weighted_f_dt = (double)f_dt;  /* PRD-017: no offsets here, equal weight */
 
             /* merge into accumulator list */
             while (acc && (docno > acc->acc.docno)) {
@@ -817,7 +892,7 @@ static enum search_ret thresh_decode(struct index *idx, struct query *query,
 
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
-                r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
+                r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
                 (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
 
@@ -849,7 +924,7 @@ static enum search_ret thresh_decode(struct index *idx, struct query *query,
                          * otherwise we end up with nonsense in some 
                          * accumulators */
                         /* METRIC_PER_DOC */
-                        r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
+                        r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
                         (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
                         *prevptr = newacc;
@@ -1008,6 +1083,7 @@ static enum search_ret thresh_decode_offsets(struct index *idx,
     double avg_D_terms;
     double w_t;
     double r_dt;
+    double weighted_f_dt;          /* PRD-017: field-boosted f_dt */
 
     double r_qt = (((param->k3) + 1) * (query->term[qterm].f_qt)) / ((param->k3) + (query->term[qterm].f_qt));
     if (docmap_avg_words(idx->map, &avg_D_terms) != DOCMAP_OK) {
@@ -1037,7 +1113,7 @@ static enum search_ret thresh_decode_offsets(struct index *idx,
         while (rethresh) {
             while (rethresh && NEXT_DOC(&v, docno, f_dt)) {
                 rethresh--;
-                SCAN_OFFSETS(src, &v, f_dt);
+                READ_OFFSETS_WEIGHTED(src, &v, f_dt, weighted_f_dt);
                 if (f_dt > thresh) {
                     thresh = f_dt;
                 }
@@ -1103,7 +1179,7 @@ static enum search_ret thresh_decode_offsets(struct index *idx,
 
     while (1) {
         while (NEXT_DOC(&v, docno, f_dt)) {
-            SCAN_OFFSETS(src, &v, f_dt);
+            READ_OFFSETS_WEIGHTED(src, &v, f_dt, weighted_f_dt);
             decoded++;
 
             /* merge into accumulator list */
@@ -1124,7 +1200,7 @@ static enum search_ret thresh_decode_offsets(struct index *idx,
 
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
-                r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
+                r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
                 (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
 
@@ -1156,7 +1232,7 @@ static enum search_ret thresh_decode_offsets(struct index *idx,
                          * otherwise we end up with nonsense in some 
                          * accumulators */
                         /* METRIC_PER_DOC */
-                        r_dt = ((((param->k1) + 1) * f_dt)       / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + f_dt));
+                        r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
                         (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
                         *prevptr = newacc;

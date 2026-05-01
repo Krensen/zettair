@@ -238,7 +238,8 @@ void postings_adddoc(struct postings* post, unsigned long int docno) {
     post->update_required = 1;
 }
 
-int postings_addwords(struct postings *post, char *text, unsigned int textlen) {
+int postings_addwords(struct postings *post, char *text, unsigned int textlen,
+                      unsigned int field_id) {
     char *term = text,
          *next,
          *end = text + textlen;
@@ -247,6 +248,8 @@ int postings_addwords(struct postings *post, char *text, unsigned int textlen) {
                  bytes;
     struct postings_node** prev,
                         * node;
+
+    assert(field_id < POSTINGS_MAX_FIELDS);
     
     while (term < end) {
         /* find the start of the next term */
@@ -342,15 +345,18 @@ int postings_addwords(struct postings *post, char *text, unsigned int textlen) {
             }
         }
 
-        /* encode new offset */
+        /* encode new offset, with field_id in the low POSTINGS_FIELD_BITS
+         * bits.  The gap is shifted up to make room for the field tag. */
         assert((post->termno > node->last_offset) || (node->last_offset == -1));
-        while (!(bytes 
-          = vec_vbyte_write(&node->vec, 
-            post->termno - (node->last_offset + 1)))) {
-             /* need to expand the node */
-             if (!postings_node_expand(node)) {
-                 return 0;
-             }
+        {
+            unsigned long int gap = post->termno - (node->last_offset + 1);
+            unsigned long int encoded = (gap << POSTINGS_FIELD_BITS) | field_id;
+            while (!(bytes = vec_vbyte_write(&node->vec, encoded))) {
+                /* need to expand the node */
+                if (!postings_node_expand(node)) {
+                    return 0;
+                }
+            }
         }
         post->size += bytes;
         node->last_offset = post->termno++;

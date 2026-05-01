@@ -55,11 +55,20 @@ struct makeindex_state {
     unsigned int stack;                   /* stack of on/off states we've been 
                                            * through */
     enum mime_types type;                 /* mime type of file */
-    enum mime_types doctype;              /* mime type of last document (note 
-                                           * that this can be different than 
+    enum mime_types doctype;              /* mime type of last document (note
+                                           * that this can be different than
                                            * file type) */
-    struct psettings_type *ptype;         /* pointer to parser settings for 
+    struct psettings_type *ptype;         /* pointer to parser settings for
                                            * type */
+    unsigned int field_id;                /* current field tag (0=body,
+                                           * 1=title, 2-15=reserved). Term
+                                           * occurrences are tagged with this
+                                           * in the postings so the BM25 scorer
+                                           * can apply per-field boosts. */
+    unsigned int field_stack;             /* shadow of the on/off `stack` that
+                                           * remembers which field we were in
+                                           * before each push. 4 bits per
+                                           * level, same depth as `stack`. */
 };
 
 #define TERMBUF_SIZE 1024
@@ -131,6 +140,8 @@ enum makeindex_ret makeindex_renew(struct makeindex *mi, enum mime_types type) {
     mi->state->eof = 0;
     mi->state->stack = 0;
     mi->state->docno_pos = 0;
+    mi->state->field_id = 0;     /* default to body field */
+    mi->state->field_stack = 0;
     mlparse_reinit(&mi->state->mlparser);
     return MAKEINDEX_OK;
 }
@@ -327,7 +338,22 @@ assert(val != MAKEINDEX_ERR);\
             str_cpy(mi->state->termpos, "sgmlcomment");                          \
         } else
  
-/* macro to handle reception of tags and pseudo-tags, since it is all very 
+/* PRD-017: flush whatever's currently in termbuf, tagged with the given
+ * field_id.  Used when crossing field boundaries so terms don't get
+ * mis-attributed.  err_action is what to do on flush failure (e.g. RETURN). */
+#define FLUSH_TERMBUF_AS(fid, err_action)                                     \
+    do {                                                                      \
+        if (mi->state->termpos > mi->state->termbuf) {                        \
+            if (postings_addwords(mi->post, mi->state->termbuf,               \
+                mi->state->termpos - mi->state->termbuf, (fid))) {            \
+                mi->state->termpos = mi->state->termbuf;                      \
+            } else {                                                          \
+                err_action;                                                   \
+            }                                                                 \
+        }                                                                     \
+    } while (0)
+
+/* macro to handle reception of tags and pseudo-tags, since it is all very
  * repetitive. */
 #define PROCESS_TAG(state_)                                                   \
     if (1) {                                                                  \
@@ -341,8 +367,23 @@ assert(val != MAKEINDEX_ERR);\
         mi->state->termpos[termlen] = '\0';                                      \
         attr = psettings_type_find(mi->state->settings, mi->state->ptype,     \
             mi->state->termpos);                                                 \
-        if (attr & PSETTINGS_ATTR_INDEX || attr & PSETTINGS_ATTR_TITLE) {     \
-            /* continue in on state */                                        \
+        if (attr & PSETTINGS_ATTR_INDEX || attr & PSETTINGS_ATTR_TITLE        \
+            || attr & PSETTINGS_ATTR_CAPTION                                  \
+            || attr & PSETTINGS_ATTR_CATEGORY                                 \
+            || attr & PSETTINGS_ATTR_SEEALSO                                  \
+            || attr & PSETTINGS_ATTR_INFOBOX) {                               \
+            /* PRD-017: entering a (possibly field-tagged) indexable region.  \
+             * If the field is changing, flush the buffer with the OLD field  \
+             * before we update field_id. Push the old field onto the stack  \
+             * so POP can restore it later. */                                \
+            unsigned int new_fid = psettings_field_id(attr);                  \
+            if (new_fid != mi->state->field_id) {                             \
+                FLUSH_TERMBUF_AS(mi->state->field_id,                         \
+                    RETURN(MAKEINDEX_ERR, STATE_ERR));                        \
+                mi->state->field_stack =                                      \
+                    (mi->state->field_stack << 4) | mi->state->field_id;      \
+                mi->state->field_id = new_fid;                                \
+            }                                                                 \
             mi->state->stack <<= 1;                                           \
             mi->state->stack |= !currstate;                                   \
             goto on_label;                                                    \
@@ -355,7 +396,8 @@ assert(val != MAKEINDEX_ERR);\
             /* ensure that the term buffer is empty prior to update */        \
             if (mi->state->termpos > mi->state->termbuf) {                    \
                 if (postings_addwords(mi->post, mi->state->termbuf,           \
-                  mi->state->termpos - mi->state->termbuf)) {                 \
+                  mi->state->termpos - mi->state->termbuf,                    \
+                  mi->state->field_id)) {                                     \
                     /* preserve tag in buffer */                              \
                     memmove(mi->state->termbuf, mi->state->termpos, termlen); \
                     mi->state->termpos = mi->state->termbuf;                  \
@@ -364,6 +406,8 @@ assert(val != MAKEINDEX_ERR);\
                 }                                                             \
             }                                                                 \
             mi->state->stack = 0;                                             \
+            mi->state->field_id = 0;                                          \
+            mi->state->field_stack = 0;                                       \
             if (postings_update(mi->post, &mi->stats)) {                      \
                 RETURN(MAKEINDEX_ENDDOC, STATE_ENDDOC);                       \
             } else {                                                          \
@@ -376,6 +420,16 @@ assert(val != MAKEINDEX_ERR);\
             /* need to check for a binary document */                         \
             goto binary_check_label;                                          \
         } else if (attr & PSETTINGS_ATTR_POP) {                               \
+            /* PRD-017: leaving a tag region — pop field_id off the field    \
+             * stack alongside the existing on/off stack. Flush before we    \
+             * change field so terms inside the popped tag get tagged with  \
+             * the right field_id. */                                        \
+            if (mi->state->field_stack || mi->state->field_id) {              \
+                FLUSH_TERMBUF_AS(mi->state->field_id,                         \
+                    RETURN(MAKEINDEX_ERR, STATE_ERR));                        \
+                mi->state->field_id = mi->state->field_stack & 0xf;           \
+                mi->state->field_stack >>= 4;                                 \
+            }                                                                 \
             if (mi->state->stack & 1) {                                       \
                 mi->state->stack >>= 1;                                       \
                 goto off_label;                                               \
@@ -429,7 +483,8 @@ assert(val != MAKEINDEX_ERR);\
             /* ensure that the term buffer is empty prior to update */        \
             if (mi->state->termpos > mi->state->termbuf) {                    \
                 if (postings_addwords(mi->post, mi->state->termbuf,           \
-                  mi->state->termpos - mi->state->termbuf)) {                 \
+                  mi->state->termpos - mi->state->termbuf,                    \
+                  mi->state->field_id)) {                                     \
                     mi->state->termpos = mi->state->termbuf;                  \
                 } else {                                                      \
                     RETURN(MAKEINDEX_ERR, STATE_ERR);                         \
@@ -522,8 +577,9 @@ on_middle:
             if (mi->state->termpos > mi->state->termbuf_mark) {
                 /* have to make room for the next term, by clearing the term
                  * buffer */
-                if (postings_addwords(mi->post, mi->state->termbuf, 
-                  mi->state->termpos - mi->state->termbuf)) {
+                if (postings_addwords(mi->post, mi->state->termbuf,
+                  mi->state->termpos - mi->state->termbuf,
+                  mi->state->field_id)) {
                     mi->state->termpos = mi->state->termbuf;
                 } else {
                     RETURN(MAKEINDEX_ERR, STATE_ERR);

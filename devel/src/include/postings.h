@@ -53,10 +53,26 @@ void postings_delete(struct postings *post);
  * function, it will add to document 0 */
 void postings_adddoc(struct postings *post, unsigned long int docno);
 
-/* add postings in text (of length len bytes), separated by '\0' markers, to 
- * the current document.  Returns true on success and 0 on failure. 
- * Note that the term will be stemmed in this function if needed. */
-int postings_addwords(struct postings *post, char *text, unsigned int len);
+/* add postings in text (of length len bytes), separated by '\0' markers, to
+ * the current document.  Returns true on success and 0 on failure.
+ * Note that the term will be stemmed in this function if needed.
+ *
+ * field_id selects which document field these terms came from.
+ *   0 = body (default)
+ *   1 = title
+ *   2-15 reserved for future use (caption, category, etc.)
+ * The field_id is encoded in the low 4 bits of each occurrence offset, so
+ * the BM25 scorer can apply per-field boosts at query time.
+ *
+ * Caller must flush the term buffer between calls if the field_id changes —
+ * a single call can only carry one field_id for all its terms. */
+int postings_addwords(struct postings *post, char *text, unsigned int len,
+                      unsigned int field_id);
+
+/* number of bits reserved for field_id at the bottom of each encoded offset */
+#define POSTINGS_FIELD_BITS 4
+#define POSTINGS_FIELD_MASK ((1u << POSTINGS_FIELD_BITS) - 1)
+#define POSTINGS_MAX_FIELDS (1u << POSTINGS_FIELD_BITS)
 
 /* whether postings list needs an update */
 int postings_needs_update(struct postings *post);
