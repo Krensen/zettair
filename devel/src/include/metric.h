@@ -1,10 +1,7 @@
-/* metric.h contains signatures for all of the metrics currently known
- * in the system.  It contains functions of different prefixes, but it
- * beats having a different header file for each metric, since they
- * consist of a single function
+/* metric.h declares the search-metric entry points.
  *
- * written nml 2005-05-31
- *
+ * Currently okapi BM25 is the only supported metric.
+ * Older variants (dirichlet, pcosine, cosine, hawkapi) were removed.
  */
 
 #ifndef METRIC_H
@@ -12,20 +9,7 @@
 
 struct search_metric;
 
-/* okapi metric */
+/* okapi BM25 metric */
 const struct search_metric *okapi(struct search_metric *sm, int offsets);
 
-/* dirichlet metric */
-const struct search_metric *dirichlet(struct search_metric *sm, int offsets);
-
-/* pivoted cosine metric */
-const struct search_metric *pcosine(struct search_metric *sm, int offsets);
-
-/* (incredibly simple) cosine metric */
-const struct search_metric *cosine(struct search_metric *sm, int offsets);
-
-/* Dave Hawking's AF1 metric */
-const struct search_metric *hawkapi(struct search_metric *sm, int offsets);
-
 #endif
-

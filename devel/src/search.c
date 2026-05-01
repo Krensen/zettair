@@ -16,7 +16,6 @@
 #include "_chash.h"
 #include "def.h"
 #include "heap.h"
-#include "impact.h"
 #include "index.h"
 #include "index_querybuild.h"
 #include "queryparse.h"
@@ -27,10 +26,10 @@
 #include "docmap.h"
 #include "vec.h"
 #include "fdset.h"
-#include "metric.h"
 #include "mrwlock.h"
 #include "postings.h"
 #include "summarise.h"
+#include "metric.h"
 #include "error.h"
 #include "zvalgrind.h"
 
@@ -862,63 +861,16 @@ enum search_ret doc_ord_eval(struct index *idx, struct query *query,
 
     alloc.opaque = list_alloc;
 
-    /* choose metric */
-    if (opts & INDEX_SEARCH_DIRICHLET_RANK) {
-        selectivity_cmp = F_t_cmp;
-        dirichlet(&sm, idx->vector_types & VOCAB_VTYPE_DOCWP);
-    } else if (opts & INDEX_SEARCH_OKAPI_RANK) {
-        okapi(&sm, idx->vector_types & VOCAB_VTYPE_DOCWP);
-    } else if (opts & INDEX_SEARCH_PCOSINE_RANK) {
-        pcosine(&sm, idx->vector_types & VOCAB_VTYPE_DOCWP);
-    } else if (opts & INDEX_SEARCH_COSINE_RANK) {
-        cosine(&sm, idx->vector_types & VOCAB_VTYPE_DOCWP);
-    } else if (opts & INDEX_SEARCH_HAWKAPI_RANK) {
-        hawkapi(&sm, idx->vector_types & VOCAB_VTYPE_DOCWP);
-    } else if (opts & INDEX_SEARCH_DYNAMIC_RANK) {
-        /* find metric according to given text.  Add new metrics to this
-         * array to allow them to be specified dynamically. */
-        enum search_ret sret;
-        const struct search_metric *(*metrics[])
-          (struct search_metric *sm, int offsets) 
-            = {dirichlet, okapi, pcosine, cosine, hawkapi};
-
-        for (i = 0; i < sizeof(metrics) / sizeof(*metrics); i++) {
-            metrics[i](&sm, idx->vector_types & VOCAB_VTYPE_DOCWP);
-            if (!str_cmp(sm.name, opt->u.dynamic.metric)) {
-                break;
-            }
-        }
-
-        /* couldn't find desired metric */
-        if (i == sizeof(metrics) / sizeof(*metrics)) {
-            return SEARCH_EINVAL;
-        }
-
-        /* initialise parameters with text parameters string.  Fiddle with
-         * option structure so we don't overwrite metric and parameters 
-         * string. */
-        if (opt) {
-            spareopt = *opt;
-        }
-        if ((sret = sm.parse_params(&spareopt.u, opt->u.dynamic.params)) == SEARCH_OK) {
-            opt = &spareopt;
-        } else {
-            free(srcarr);
-            return sret;
-        }
-
-        /* having found the correct metric and parsed parameters, we can now
-         * proceed as usual */
-    } else {
-        /* default is dirichlet with mu = 1500.  Fiddle with opt structure to
-         * ensure everything works ok even if people pass a NULL */
-        selectivity_cmp = F_t_cmp;
-        dirichlet(&sm, idx->vector_types & VOCAB_VTYPE_DOCWP);
-        opts |= INDEX_SEARCH_DIRICHLET_RANK;
-        if (!opt) {
-            opt = &spareopt;
-        }
-        opt->u.dirichlet.mu = 1500;
+    /* Only Okapi BM25 is supported. Any other ranking flag is treated as
+     * a no-op and falls through to Okapi. (Dropped: dirichlet, cosine,
+     * pcosine, hawkapi.) */
+    okapi(&sm, idx->vector_types & VOCAB_VTYPE_DOCWP);
+    opts |= INDEX_SEARCH_OKAPI_RANK;
+    if (!opt) {
+        opt = &spareopt;
+        opt->u.okapi.k1 = 1.2;
+        opt->u.okapi.k3 = 1e10;
+        opt->u.okapi.b = 0.75;
     }
 
     if ((ret = sm.pre(idx, query, opts, opt)) != SEARCH_OK) {
@@ -1250,9 +1202,7 @@ int index_search(struct index *idx, const char *querystr,
             /* assign custom vector and process terms into it */
             query.term[i].vecmem = NULL;
             query.term[i].vecsize = 0;
-            /* note that we can't process conjuncts using impacts */
-            if (!(opts & INDEX_SEARCH_ANH_IMPACT_RANK) 
-              && process_conjunct(idx, &query.term[i], &list_alloc, mem) 
+            if (process_conjunct(idx, &query.term[i], &list_alloc, mem)
               == SEARCH_OK) {
                 if (list_alloc.opaque) {
                     poolalloc_clear(list_alloc.opaque);
@@ -1275,36 +1225,17 @@ int index_search(struct index *idx, const char *querystr,
         return 0;
     }
 
-    /* evaluate the query */
-    if (opts & INDEX_SEARCH_ANH_IMPACT_RANK) {
-        ret = SEARCH_EINVAL;
-        if ((hashacc = chash_luint_new(bit_log2(acc_limit), 2.0)) 
-          && ((ret = impact_ord_eval(idx, &query, hashacc, acc_limit, 
-              &list_alloc, mem)) 
-            == SEARCH_OK)) {
-            /* impact ordered evaluation succeeded */
-            accs = chash_size(hashacc);
-        } else {
-            if (hashacc) {
-                chash_delete(hashacc);
-                free(query.term);
-                mrwlock_runlock(idx->biglock);
-                return 0;
-            }
-        }
-        /* XXX: set total results because we don't do it in impact_ord_eval */
-        *total_results = accs; 
-        *tr_est = 1;
-    } else {
-        struct search_metric_results results 
+    /* evaluate the query (Okapi BM25 only) */
+    {
+        struct search_metric_results results
           = {NULL, 0, 0, NULL, FLT_MIN, 0, 0.0};
         results.acc_limit = acc_limit;
         results.alloc = acc_alloc;
-        ret = doc_ord_eval(idx, &query, list_alloc.opaque, mem, &results, 
+        ret = doc_ord_eval(idx, &query, list_alloc.opaque, mem, &results,
             opts, opt);
         accs = results.accs;
         acc = results.acc;
-        *total_results = results.total_results; 
+        *total_results = results.total_results;
         *tr_est = results.estimated;
     }
     if (list_alloc.opaque) {

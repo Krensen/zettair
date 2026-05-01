@@ -51,19 +51,11 @@ void print_usage(const char *progname, FILE *output, int verbose) {
     fprintf(output, "    -h,--help: print this message\n");
 
     fprintf(output, "\n");
-    fprintf(output, "  query metric options:\n");
-    fprintf(output, "    --anh-impact: evaluate using impact-ordered lists\n"
-                    "                  (must have specified --anh-impact while indexing)\n");
-    fprintf(output, "    --okapi: use Okapi BM25 metric\n");
+    fprintf(output, "  query metric options (Okapi BM25 only):\n");
+    fprintf(output, "    --okapi: use Okapi BM25 metric (default)\n");
     fprintf(output, "    --k1=[double]: set Okapi BM25 k1 value\n");
     fprintf(output, "    --k3=[double]: set Okapi BM25 k3 value\n");
     fprintf(output, "    --b=[double]: set Okapi BM25 b value\n");
-    fprintf(output, "    --pivoted-cosine=[double]: use pivoted cosine metric, with given pivot\n");
-    fprintf(output, "    --cosine: use cosine metric\n");
-    fprintf(output, "    --hawkapi=[double]: use Dave Hawking's metric, with alpha given\n");
-    fprintf(output, "    --dirichlet=[uint]: use Dirichlet-smoothed LM metric, with mu given\n");
-    fprintf(output, "    --metric=[string]: use named metric, with given parameters\n");
-    fprintf(output, "    --metric-parameters=[string]: parameters for metric, in the form [name]=[value], separated by commas\n");
 
     fprintf(output, "\n");
     fprintf(output, "usage to index: '%s -i file1 ... fileN'\n", name);
@@ -75,7 +67,6 @@ void print_usage(const char *progname, FILE *output, int verbose) {
                     "                    (value is one of none, eds, light, porters)\n"
                     "                    (default is light)\n");
     fprintf(output, "    --add: add indexed files to an existing index\n");
-    fprintf(output, "    --anh-impact: generate impact-ordered lists\n");
     fprintf(output, "    --no-offsets: generate lists without offsets\n");
 
     return;
@@ -220,12 +211,11 @@ enum {
     OPT_MEMORY, OPT_ACCUMULATION_MEMORY, OPT_ACCUMULATION_DOCS, OPT_DUMP_MEMORY,
     OPT_DUMP_VECS, OPT_REBUILD, OPT_REMERGE, OPT_INPLACE, OPT_MAXFILESIZE, 
     OPT_FILELIST, OPT_ADD, OPT_ADD_STATS, OPT_OKAPI, OPT_K1, OPT_K3, OPT_B,
-    OPT_PIVOTED_COSINE, OPT_COSINE, OPT_WORD_LIMIT, OPT_HAWKAPI, 
+    OPT_WORD_LIMIT,
     OPT_SORT_ACCESSES, OPT_NO_OFFSETS,
-    OPT_FRAPPEND, 
-    OPT_STEM, OPT_BUILD_STOP, OPT_QUERY_STOP, OPT_ACCUMULATOR_LIMIT, 
+    OPT_FRAPPEND,
+    OPT_STEM, OPT_BUILD_STOP, OPT_QUERY_STOP, OPT_ACCUMULATOR_LIMIT,
     OPT_IGNORE_VERSION,
-    OPT_DIRICHLET, OPT_ANH_IMPACT, 
     OPT_TABLESIZE, OPT_PARSEBUF, OPT_BIG_AND_FAST, OPT_QUERYLIST,
     OPT_DYNAMIC, OPT_DYNAMIC_PARAMS,
     OPT_OUTPUT_JSON
@@ -284,11 +274,6 @@ static struct args *parse_args(unsigned int argc, char **argv, struct args *args
         {"k1", '1', GETLONGOPT_ARG_REQUIRED, OPT_K1},
         {"k3", '3', GETLONGOPT_ARG_REQUIRED, OPT_K3},
         {"b", 'b', GETLONGOPT_ARG_REQUIRED, OPT_B},
-        {"pivoted-cosine", '\0', GETLONGOPT_ARG_REQUIRED, OPT_PIVOTED_COSINE},
-        {"cosine", '\0', GETLONGOPT_ARG_NONE, OPT_COSINE},
-        {"hawkapi", '\0', GETLONGOPT_ARG_REQUIRED, OPT_HAWKAPI},
-        {"anh-impact", '\0', GETLONGOPT_ARG_NONE, OPT_ANH_IMPACT},
-        {"dirichlet", '\0', GETLONGOPT_ARG_REQUIRED, OPT_DIRICHLET},
         {"metric", '\0', GETLONGOPT_ARG_REQUIRED, OPT_DYNAMIC},
         {"metric-parameters", '\0', GETLONGOPT_ARG_REQUIRED, OPT_DYNAMIC_PARAMS},
         {"output", '\0', GETLONGOPT_ARG_REQUIRED, OPT_OUTPUT_JSON},
@@ -890,121 +875,6 @@ static struct args *parse_args(unsigned int argc, char **argv, struct args *args
                 err = 1;
                 fprintf(output, 
                   "okapi b option must be used with search options\n");
-            }
-            break;
-
-        case OPT_ANH_IMPACT:
-            args->sopts |= INDEX_SEARCH_ANH_IMPACT_RANK;
-            args->copts |= INDEX_COMMIT_ANH_IMPACTS;
-            break;
-
-        case OPT_DIRICHLET:
-            if (!must_index && !must_stat) {
-                must_search = 1;
-                if (metric) {
-                    err = 1;
-                    fprintf(output, "metric set multiple times\n");
-                } else {
-                    metric = 1;
-                    args->sopts |= INDEX_SEARCH_DIRICHLET_RANK;
-
-                    errno = 0;
-                    dnum = strtod(arg, &tmp);
-                    if (!errno && !*tmp) {
-                        args->sopt.u.dirichlet.mu = dnum;
-                    } else {
-                        fprintf(output, 
-                          "error converting mu value '%s'\n", arg);
-                        verbose = 0;
-                        err = 1;
-                    }
-                }
-            } else {
-                err = 1;
-                fprintf(output, 
-                  "dirichlet option must be used with search options\n");
-            }
-            break;
-
-        case OPT_HAWKAPI:
-            if (!must_index && !must_stat) {
-                must_search = 1;
-                if (metric) {
-                    err = 1;
-                    fprintf(output, "metric set multiple times\n");
-                } else {
-                    metric = 1;
-                    args->sopts |= INDEX_SEARCH_HAWKAPI_RANK;
-
-                    errno = 0;
-                    dnum = strtod(arg, &tmp);
-                    if (!errno && !*tmp) {
-                        args->sopt.u.hawkapi.alpha = dnum;
-                        args->sopt.u.hawkapi.k3 = 1e10; /* ~= inf */
-                    } else {
-                        fprintf(output, 
-                          "error converting start result value '%s'\n", arg);
-                        verbose = 0;
-                        err = 1;
-                    }
-                }
-            } else {
-                err = 1;
-                fprintf(output, 
-                  "hawkapi option must be used with search options\n");
-            }
-            break;
-
-        case OPT_PIVOTED_COSINE: 
-            if (!must_index && !must_stat) {
-                must_search = 1;
-                if (metric) {
-                    err = 1;
-                    fprintf(output, "metric set multiple times\n");
-                } else {
-                    metric = 1;
-                    args->sopts |= INDEX_SEARCH_PCOSINE_RANK;
-
-                    /* arrange for weights to be loaded into memory */
-                    args->lopts |= INDEX_LOAD_DOCMAP_CACHE;
-                    args->lopt.docmap_cache |= DOCMAP_CACHE_WEIGHT;
-
-                    errno = 0;
-                    dnum = strtod(arg, &tmp);
-                    if (!errno && !*tmp) {
-                        args->sopt.u.pcosine.pivot = dnum;
-                    } else {
-                        fprintf(output, 
-                          "error converting start result value '%s'\n", arg);
-                        verbose = 0;
-                        err = 1;
-                    }
-                }
-            } else {
-                err = 1;
-                fprintf(output, 
-                  "pivoted cosine option must be used with search options\n");
-            }
-            break;
-
-        case OPT_COSINE:
-            if (!must_index && !must_stat) {
-                must_search = 1;
-                if (metric) {
-                    err = 1;
-                    fprintf(output, "metric set multiple times\n");
-                } else {
-                    metric = 1;
-                    args->sopts |= INDEX_SEARCH_COSINE_RANK;
-
-                    /* arrange for weights to be loaded into memory */
-                    args->lopts |= INDEX_LOAD_DOCMAP_CACHE;
-                    args->lopt.docmap_cache |= DOCMAP_CACHE_WEIGHT;
-                }
-            } else {
-                err = 1;
-                fprintf(output, 
-                  "cosine option must be used with search options\n");
             }
             break;
 

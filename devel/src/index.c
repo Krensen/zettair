@@ -21,7 +21,6 @@
 #include "freemap.h"
 #include "docmap.h"
 #include "getmaxfsize.h"
-#include "impact_build.h"
 #include "iobtree.h"
 #include "str.h"
 #include "stream.h"
@@ -1855,7 +1854,6 @@ int index_commit(struct index *idx,
   unsigned int addopts, struct index_add_opt *addopt) {
     int ret,
         altered = 0;
-    enum impact_ret impact_ret;
 
     if (mrwlock_wlock(idx->biglock) != MRWLOCK_OK) {
         ERROR("unable to obtain write lock");
@@ -1950,17 +1948,6 @@ int index_commit(struct index *idx,
         idx->vtmp_type = idx->vocab_type;
         idx->vocab_type = len;
         altered = 1;
-    }
-
-    /* add impact ordered vectors to index if requested */
-    if (opts & INDEX_COMMIT_ANH_IMPACTS) {
-        impact_ret = impact_order_index(idx);
-        altered = 1;
-        if (impact_ret != IMPACT_OK) {
-            ERROR("creating impact vectors");
-            mrwlock_wunlock(idx->biglock);
-            return 0;
-        }
     }
 
     /* recommit superblock */

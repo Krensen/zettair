@@ -14,7 +14,7 @@ AM_CFLAGS =
 AM_LDFLAGS = @LIBS@
 
 # declaration of what to build (hint: nodist only seems to apply to SOURCES)
-bin_PROGRAMS = zet zet_trec zet_cat zet_impactify
+bin_PROGRAMS = zet zet_trec zet_cat
 data_DATA = config/psettings.xml
 lib_LTLIBRARIES = libzet.la
 noinst_PROGRAMS = zet_diff zet_file zet_dict \
@@ -67,7 +67,6 @@ noinst_HEADERS = src/include/heap.h       include/index.h \
                  src/include/crc.h        src/include/trec_eval.h \
                  src/include/docmap.h     src/include/_docmap.h \
                  src/include/reposset.h   src/include/_reposset.h \
-				 src/include/impact.h     src/include/impact_build.h \
                  src/include/ioutil.h     src/include/mrwlock.h \
                  src/include/testutils.h \
                  src/include/compat/zstdint.h \
@@ -90,9 +89,7 @@ EXTRA_DIST = config/psettings.xml config/stoplist_sorted \
              doc/hacking.html doc/index.html doc/logo.gif \
              doc/Readme.html doc/README.TXT doc/Search.html \
              doc/style.css doc/Tutorial.html \
-             scripts/metric.py scripts/mime.py src/metric.c \
-             src/dirichlet.metric src/pcosine.metric \
-             src/cosine.metric src/hawkapi.metric src/okapi.metric \
+             scripts/mime.py \
              \
              win32/visualc6/zettair.dsw \
              win32/visualc6/zet.dsp \
@@ -139,10 +136,9 @@ library_sources = src/str.c src/index.c src/mlparse.c \
                   src/psettings.c src/psettings_default.c src/lcrand.c \
                   src/objalloc.c src/ioutil.c src/docmap.c src/reposset.c \
                   src/poolalloc.c src/alloc.c src/staticalloc.c \
-				  src/impact.c src/impact_build.c src/mrwlock.c src/zpthread.c \
+				  src/mrwlock.c src/zpthread.c \
 				  \
-				  src/dirichlet.c src/pcosine.c \
-				  src/cosine.c src/hawkapi.c src/okapi.c \
+				  src/okapi.c \
                   \
                   src/libtextcodec/crc.c src/libtextcodec/stream.c \
                   src/libtextcodec/detectfilter.c \
@@ -166,10 +162,6 @@ zet_file_CFLAGS = -DHACK
 zet_diff_SOURCES = tools/diff.c
 zet_diff_LDADD = -lzet -L. 
 zet_diff_DEPENDENCIES = libzet.la
-
-zet_impactify_SOURCES = tools/impactify.c
-zet_impactify_LDADD = -lzet -L. 
-zet_impactify_DEPENDENCIES = libzet.la
 
 btree_SOURCES = tools/btree.c
 btree_LDADD = -lzet -L. 
@@ -408,24 +400,6 @@ src/mime.c: scripts/mime.py src/mime-types.txt src/media-types.txt \
 src/include/mime.h: scripts/mime.py src/mime-types.txt src/media-types.txt
 	$(PYTHON) scripts/mime.py --c-header src/mime-types.txt src/mime-types.txt \
 	    src/media-types.txt /etc/mime.types > $@
-endif
-
-# generate metric files 
-if HAVE_PYTHON
-src/okapi.c: scripts/metric.py src/okapi.metric src/metric.c 
-	$(PYTHON) scripts/metric.py src/okapi.metric src/metric.c > $@
-
-src/hawkapi.c: scripts/metric.py src/hawkapi.metric src/metric.c 
-	$(PYTHON) scripts/metric.py src/hawkapi.metric src/metric.c > $@
-
-src/dirichlet.c: scripts/metric.py src/dirichlet.metric src/metric.c 
-	$(PYTHON) scripts/metric.py src/dirichlet.metric src/metric.c > $@
-
-src/cosine.c: scripts/metric.py src/cosine.metric src/metric.c 
-	$(PYTHON) scripts/metric.py src/cosine.metric src/metric.c > $@
-
-src/pcosine.c: scripts/metric.py src/pcosine.metric src/metric.c 
-	$(PYTHON) scripts/metric.py src/pcosine.metric src/metric.c > $@
 endif
 
 # create dependancy to generate parser settings default file (not

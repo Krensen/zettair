@@ -36,8 +36,7 @@ POST_UNINSTALL = :
 build_triplet = @build@
 host_triplet = @host@
 target_triplet = @target@
-bin_PROGRAMS = zet$(EXEEXT) zet_trec$(EXEEXT) zet_cat$(EXEEXT) \
-	zet_impactify$(EXEEXT)
+bin_PROGRAMS = zet$(EXEEXT) zet_trec$(EXEEXT) zet_cat$(EXEEXT)
 noinst_PROGRAMS = zet_diff$(EXEEXT) zet_file$(EXEEXT) \
 	zet_dict$(EXEEXT) src/test/str_1$(EXEEXT) \
 	src/test/bucket_1$(EXEEXT) src/test/mem_1$(EXEEXT) \
@@ -103,9 +102,8 @@ am__objects_1 = src/str.lo src/index.lo src/mlparse.lo src/stop.lo \
 	src/remerge.lo src/signals.lo src/stack.lo src/rbtree.lo \
 	src/psettings.lo src/psettings_default.lo src/lcrand.lo \
 	src/objalloc.lo src/ioutil.lo src/docmap.lo src/reposset.lo \
-	src/poolalloc.lo src/alloc.lo src/staticalloc.lo src/impact.lo \
-	src/impact_build.lo src/mrwlock.lo src/zpthread.lo \
-	src/dirichlet.lo src/pcosine.lo src/cosine.lo src/hawkapi.lo \
+	src/poolalloc.lo src/alloc.lo src/staticalloc.lo \
+	src/mrwlock.lo src/zpthread.lo \
 	src/okapi.lo src/libtextcodec/crc.lo \
 	src/libtextcodec/stream.lo src/libtextcodec/detectfilter.lo \
 	src/libtextcodec/gunzipfilter.lo
@@ -544,8 +542,6 @@ zet_file_LDADD = $(LDADD)
 zet_file_LINK = $(LIBTOOL) --tag=CC $(AM_LIBTOOLFLAGS) $(LIBTOOLFLAGS) \
 	--mode=link $(CCLD) $(zet_file_CFLAGS) $(CFLAGS) $(AM_LDFLAGS) \
 	$(LDFLAGS) -o $@
-am_zet_impactify_OBJECTS = tools/impactify.$(OBJEXT)
-zet_impactify_OBJECTS = $(am_zet_impactify_OBJECTS)
 am_zet_trec_OBJECTS = src/trecrun.$(OBJEXT) src/trec_eval.$(OBJEXT)
 zet_trec_OBJECTS = $(am_zet_trec_OBJECTS)
 DEFAULT_INCLUDES = -I.@am__isrc@ -I$(top_builddir)/src/include
@@ -578,7 +574,7 @@ SOURCES = $(libzet_la_SOURCES) $(btree_SOURCES) $(chash_test_SOURCES) \
 	$(stem_SOURCES) $(stem_test_SOURCES) $(stop_gen_SOURCES) \
 	$(zet_SOURCES) $(zet_cat_SOURCES) $(zet_dict_SOURCES) \
 	$(zet_diff_SOURCES) $(zet_file_SOURCES) \
-	$(zet_impactify_SOURCES) $(zet_trec_SOURCES)
+	$(zet_trec_SOURCES)
 DIST_SOURCES = $(libzet_la_SOURCES) $(btree_SOURCES) \
 	$(chash_test_SOURCES) $(hashtime_SOURCES) \
 	$(lcrand_test_SOURCES) $(mime_test_SOURCES) \
@@ -597,7 +593,7 @@ DIST_SOURCES = $(libzet_la_SOURCES) $(btree_SOURCES) \
 	$(staticalloc_test_SOURCES) $(stem_SOURCES) \
 	$(stem_test_SOURCES) $(stop_gen_SOURCES) $(zet_SOURCES) \
 	$(zet_cat_SOURCES) $(zet_dict_SOURCES) $(zet_diff_SOURCES) \
-	$(zet_file_SOURCES) $(zet_impactify_SOURCES) \
+	$(zet_file_SOURCES) \
 	$(zet_trec_SOURCES)
 dataDATA_INSTALL = $(INSTALL_DATA)
 DATA = $(data_DATA)
@@ -783,7 +779,6 @@ noinst_HEADERS = src/include/heap.h       include/index.h \
                  src/include/crc.h        src/include/trec_eval.h \
                  src/include/docmap.h     src/include/_docmap.h \
                  src/include/reposset.h   src/include/_reposset.h \
-				 src/include/impact.h     src/include/impact_build.h \
                  src/include/ioutil.h     src/include/mrwlock.h \
                  src/include/testutils.h \
                  src/include/compat/zstdint.h \
@@ -806,9 +801,7 @@ EXTRA_DIST = config/psettings.xml config/stoplist_sorted \
              doc/hacking.html doc/index.html doc/logo.gif \
              doc/Readme.html doc/README.TXT doc/Search.html \
              doc/style.css doc/Tutorial.html \
-             scripts/metric.py scripts/mime.py src/metric.c \
-             src/dirichlet.metric src/pcosine.metric \
-             src/cosine.metric src/hawkapi.metric src/okapi.metric \
+             scripts/mime.py \
              \
              win32/visualc6/zettair.dsw \
              win32/visualc6/zet.dsp \
@@ -853,10 +846,9 @@ library_sources = src/str.c src/index.c src/mlparse.c \
                   src/psettings.c src/psettings_default.c src/lcrand.c \
                   src/objalloc.c src/ioutil.c src/docmap.c src/reposset.c \
                   src/poolalloc.c src/alloc.c src/staticalloc.c \
-				  src/impact.c src/impact_build.c src/mrwlock.c src/zpthread.c \
+				  src/mrwlock.c src/zpthread.c \
 				  \
-				  src/dirichlet.c src/pcosine.c \
-				  src/cosine.c src/hawkapi.c src/okapi.c \
+				  src/okapi.c \
                   \
                   src/libtextcodec/crc.c src/libtextcodec/stream.c \
                   src/libtextcodec/detectfilter.c \
@@ -876,9 +868,6 @@ zet_file_CFLAGS = -DHACK
 zet_diff_SOURCES = tools/diff.c
 zet_diff_LDADD = -lzet -L. 
 zet_diff_DEPENDENCIES = libzet.la
-zet_impactify_SOURCES = tools/impactify.c
-zet_impactify_LDADD = -lzet -L. 
-zet_impactify_DEPENDENCIES = libzet.la
 btree_SOURCES = tools/btree.c
 btree_LDADD = -lzet -L. 
 btree_DEPENDENCIES = libzet.la
@@ -1188,14 +1177,8 @@ src/reposset.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 src/poolalloc.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 src/alloc.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 src/staticalloc.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
-src/impact.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
-src/impact_build.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 src/mrwlock.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 src/zpthread.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
-src/dirichlet.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
-src/pcosine.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
-src/cosine.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
-src/hawkapi.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 src/okapi.lo: src/$(am__dirstamp) src/$(DEPDIR)/$(am__dirstamp)
 src/libtextcodec/$(am__dirstamp):
 	@$(MKDIR_P) src/libtextcodec
@@ -1888,11 +1871,6 @@ src/zet_file-str.$(OBJEXT): src/$(am__dirstamp) \
 zet_file$(EXEEXT): $(zet_file_OBJECTS) $(zet_file_DEPENDENCIES) 
 	@rm -f zet_file$(EXEEXT)
 	$(zet_file_LINK) $(zet_file_OBJECTS) $(zet_file_LDADD) $(LIBS)
-tools/impactify.$(OBJEXT): tools/$(am__dirstamp) \
-	tools/$(DEPDIR)/$(am__dirstamp)
-zet_impactify$(EXEEXT): $(zet_impactify_OBJECTS) $(zet_impactify_DEPENDENCIES) 
-	@rm -f zet_impactify$(EXEEXT)
-	$(LINK) $(zet_impactify_OBJECTS) $(zet_impactify_LDADD) $(LIBS)
 src/trecrun.$(OBJEXT): src/$(am__dirstamp) \
 	src/$(DEPDIR)/$(am__dirstamp)
 src/trec_eval.$(OBJEXT): src/$(am__dirstamp) \
@@ -1924,10 +1902,6 @@ mostlyclean-compile:
 	-rm -f src/chash_test-objalloc.$(OBJEXT)
 	-rm -f src/chash_test-str.$(OBJEXT)
 	-rm -f src/commandline.$(OBJEXT)
-	-rm -f src/cosine.$(OBJEXT)
-	-rm -f src/cosine.lo
-	-rm -f src/dirichlet.$(OBJEXT)
-	-rm -f src/dirichlet.lo
 	-rm -f src/docmap.$(OBJEXT)
 	-rm -f src/docmap.lo
 	-rm -f src/error.$(OBJEXT)
@@ -1946,14 +1920,8 @@ mostlyclean-compile:
 	-rm -f src/hashtime-mem.$(OBJEXT)
 	-rm -f src/hashtime-objalloc.$(OBJEXT)
 	-rm -f src/hashtime-str.$(OBJEXT)
-	-rm -f src/hawkapi.$(OBJEXT)
-	-rm -f src/hawkapi.lo
 	-rm -f src/heap.$(OBJEXT)
 	-rm -f src/heap.lo
-	-rm -f src/impact.$(OBJEXT)
-	-rm -f src/impact.lo
-	-rm -f src/impact_build.$(OBJEXT)
-	-rm -f src/impact_build.lo
 	-rm -f src/index.$(OBJEXT)
 	-rm -f src/index.lo
 	-rm -f src/index_querybuild.$(OBJEXT)
@@ -2009,8 +1977,6 @@ mostlyclean-compile:
 	-rm -f src/objalloc_test-str.$(OBJEXT)
 	-rm -f src/okapi.$(OBJEXT)
 	-rm -f src/okapi.lo
-	-rm -f src/pcosine.$(OBJEXT)
-	-rm -f src/pcosine.lo
 	-rm -f src/poolalloc.$(OBJEXT)
 	-rm -f src/poolalloc.lo
 	-rm -f src/poolalloc_test-alloc.$(OBJEXT)
@@ -2278,7 +2244,6 @@ mostlyclean-compile:
 	-rm -f tools/dict.$(OBJEXT)
 	-rm -f tools/diff.$(OBJEXT)
 	-rm -f tools/hashtime-hashtime.$(OBJEXT)
-	-rm -f tools/impactify.$(OBJEXT)
 	-rm -f tools/stem-stem.$(OBJEXT)
 	-rm -f tools/zet_file-file.$(OBJEXT)
 
@@ -2299,8 +2264,6 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/chash_test-objalloc.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/chash_test-str.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/commandline.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/cosine.Plo@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/dirichlet.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/docmap.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/error.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/fdset.Plo@am__quote@
@@ -2313,10 +2276,7 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/hashtime-mem.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/hashtime-objalloc.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/hashtime-str.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/hawkapi.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/heap.Plo@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/impact.Plo@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/impact_build.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/index.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/index_querybuild.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/iobtree.Plo@am__quote@
@@ -2346,7 +2306,6 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/objalloc_test-objalloc.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/objalloc_test-str.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/okapi.Plo@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/pcosine.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/poolalloc.Plo@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/poolalloc_test-alloc.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@src/$(DEPDIR)/poolalloc_test-bit.Po@am__quote@
@@ -2600,7 +2559,6 @@ distclean-compile:
 @AMDEP_TRUE@@am__include@ @am__quote@tools/$(DEPDIR)/dict.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tools/$(DEPDIR)/diff.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tools/$(DEPDIR)/hashtime-hashtime.Po@am__quote@
-@AMDEP_TRUE@@am__include@ @am__quote@tools/$(DEPDIR)/impactify.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tools/$(DEPDIR)/stem-stem.Po@am__quote@
 @AMDEP_TRUE@@am__include@ @am__quote@tools/$(DEPDIR)/zet_file-file.Po@am__quote@
 
@@ -6588,21 +6546,6 @@ dist-hook:
 @HAVE_PYTHON_TRUE@	    src/media-types.txt /etc/mime.types > $@
 
 # generate metric files 
-@HAVE_PYTHON_TRUE@src/okapi.c: scripts/metric.py src/okapi.metric src/metric.c 
-@HAVE_PYTHON_TRUE@	$(PYTHON) scripts/metric.py src/okapi.metric src/metric.c > $@
-
-@HAVE_PYTHON_TRUE@src/hawkapi.c: scripts/metric.py src/hawkapi.metric src/metric.c 
-@HAVE_PYTHON_TRUE@	$(PYTHON) scripts/metric.py src/hawkapi.metric src/metric.c > $@
-
-@HAVE_PYTHON_TRUE@src/dirichlet.c: scripts/metric.py src/dirichlet.metric src/metric.c 
-@HAVE_PYTHON_TRUE@	$(PYTHON) scripts/metric.py src/dirichlet.metric src/metric.c > $@
-
-@HAVE_PYTHON_TRUE@src/cosine.c: scripts/metric.py src/cosine.metric src/metric.c 
-@HAVE_PYTHON_TRUE@	$(PYTHON) scripts/metric.py src/cosine.metric src/metric.c > $@
-
-@HAVE_PYTHON_TRUE@src/pcosine.c: scripts/metric.py src/pcosine.metric src/metric.c 
-@HAVE_PYTHON_TRUE@	$(PYTHON) scripts/metric.py src/pcosine.metric src/metric.c > $@
-
 # create dependancy to generate parser settings default file (not
 # after distribution though)
 src/psettings_default.c: psettings_gen config/psettings.xml
