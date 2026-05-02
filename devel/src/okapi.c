@@ -279,23 +279,47 @@ static enum search_ret post(struct index *idx, struct query *query, struct searc
         } while (toscan);                                                     \
     } while (0)
 
-/* PRD-017: read f_dt offsets, decode the field_id in the low
- * POSTINGS_FIELD_BITS bits of each, and accumulate a weighted sum into
- * (weighted) instead of f_dt.  This replaces SCAN_OFFSETS in the okapi
- * scoring loops so that title (and future field) hits count more.
+/* PRD-017: read f_dt offsets and accumulate a field-weighted sum into
+ * (weighted) instead of just counting them.  Used in the okapi scoring
+ * loops so that title (and future field) hits count more.
  *
- * weighted is a double accumulator; toread is a counter; v is the vec*. */
+ * Optimization: the encoded offset is (gap << POSTINGS_FIELD_BITS) | field_id.
+ * vbyte stores the low 7 bits of a value in the first byte. The field_id
+ * therefore lives in the low POSTINGS_FIELD_BITS bits of the FIRST byte of
+ * each vbyte sequence — we don't need to decode the full value, just peek
+ * the first byte and then skip continuation bytes (high-bit-set).
+ * Same cost shape as the old SCAN_OFFSETS, plus one array lookup per offset.
+ *
+ * weighted: double accumulator. f_dt: number of offsets. v: struct vec *. */
 #define READ_OFFSETS_WEIGHTED(src, v, f_dt, weighted)                         \
     do {                                                                      \
         unsigned int toread = f_dt;                                           \
-        unsigned long int enc;                                                \
         enum search_ret sret;                                                 \
+        unsigned char *p, *e, b;                                              \
         (weighted) = 0.0;                                                     \
         while (toread) {                                                      \
-            if (vec_vbyte_read((v), &enc)) {                                  \
-                (weighted) += g_field_boost[enc & POSTINGS_FIELD_MASK];       \
-                toread--;                                                     \
-            } else {                                                          \
+            p = (unsigned char *)(v)->pos;                                    \
+            e = (unsigned char *)(v)->end;                                    \
+            /* fast path: scan as many full vbyte sequences as the current    \
+             * buffer holds, accumulating field-weights from the first byte   \
+             * of each */                                                     \
+            while (toread && p < e) {                                         \
+                unsigned char *start = p;                                     \
+                /* walk continuation bytes (high bit set) */                  \
+                while (p < e && (*p & 0x80)) p++;                             \
+                if (p < e) {                                                  \
+                    /* p now points at terminating byte; vbyte complete */    \
+                    (weighted) += g_field_boost[*start & POSTINGS_FIELD_MASK];\
+                    p++;                                                      \
+                    toread--;                                                 \
+                } else {                                                      \
+                    /* ran out mid-vbyte — rewind to start, refill */         \
+                    p = start;                                                \
+                    break;                                                    \
+                }                                                             \
+            }                                                                 \
+            (v)->pos = (char *)p;                                             \
+            if (toread) {                                                     \
                 /* need more data */                                          \
                 if ((sret = src->read(src, VEC_LEN(v),                        \
                     (void **) &(v)->pos, &bytes)) == SEARCH_OK) {             \
