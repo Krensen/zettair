@@ -1148,11 +1148,20 @@ int search(struct index *idx, const char *query, struct index_result *result,
                 {
                     extern double zet_phase_parse_ms, zet_phase_eval_ms,
                                   zet_phase_heap_ms, zet_phase_summary_ms;
+                    extern double zet_inner_decode_ms, zet_inner_walk_ms,
+                                  zet_inner_score_ms;
+                    extern unsigned long int zet_inner_postings,
+                                             zet_inner_walk_steps;
                     fprintf(stdout, "{\"done\":true,\"count\":%u,\"total\":%.0f,\"took_ms\":%.2f,"
-                          "\"parse_ms\":%.2f,\"eval_ms\":%.2f,\"heap_ms\":%.2f,\"summary_ms\":%.2f}\n",
+                          "\"parse_ms\":%.2f,\"eval_ms\":%.2f,\"heap_ms\":%.2f,\"summary_ms\":%.2f,"
+                          "\"decode_ms\":%.2f,\"walk_ms\":%.2f,\"score_ms\":%.2f,"
+                          "\"postings\":%lu,\"walk_steps\":%lu}\n",
                           results, total_results, seconds * 1000.0,
                           zet_phase_parse_ms, zet_phase_eval_ms,
-                          zet_phase_heap_ms, zet_phase_summary_ms);
+                          zet_phase_heap_ms, zet_phase_summary_ms,
+                          zet_inner_decode_ms, zet_inner_walk_ms,
+                          zet_inner_score_ms,
+                          zet_inner_postings, zet_inner_walk_steps);
                 }
                 fflush(stdout);
             } else {

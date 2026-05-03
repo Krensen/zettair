@@ -1093,8 +1093,12 @@ int index_search(struct index *idx, const char *querystr,
     struct alloc list_alloc;             /* memory allocator for query
                                           * resolution */
     double tphase;                       /* phase timer */
+    extern double zet_inner_decode_ms, zet_inner_walk_ms, zet_inner_score_ms;
+    extern unsigned long int zet_inner_postings, zet_inner_walk_steps;
     zet_phase_parse_ms = zet_phase_eval_ms = 0.0;
     zet_phase_heap_ms  = zet_phase_summary_ms = 0.0;
+    zet_inner_decode_ms = zet_inner_walk_ms = zet_inner_score_ms = 0.0;
+    zet_inner_postings = zet_inner_walk_steps = 0;
     tphase = tnow_ms();
     struct search_acc_cons *acc = NULL;  /* accumulators */
     struct chash *hashacc = NULL;        /* hashed accumulators */

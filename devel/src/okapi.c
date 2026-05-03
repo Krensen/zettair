@@ -32,6 +32,22 @@
 #include <math.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <sys/time.h>
+
+/* Fine-grained accumulators for inner-loop timing inside or_decode_offsets.
+ * commandline.c reads these to emit a JSON breakdown.  Reset by search.c
+ * at the start of every index_search call. */
+double zet_inner_decode_ms = 0.0;
+double zet_inner_walk_ms   = 0.0;
+double zet_inner_score_ms  = 0.0;
+unsigned long int zet_inner_postings = 0;
+unsigned long int zet_inner_walk_steps = 0;
+
+static inline double tnow_us(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1e6 + tv.tv_usec;
+}
 
 /* ── Click prior — loaded from ZET_CLICK_PRIOR at startup ── */
 static float        *g_click_prior     = NULL;
@@ -473,14 +489,20 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
 
 
     while (1) {
+        double t0 = tnow_us();
         while (NEXT_DOC(&v, docno, f_dt)) {
+            unsigned long walk = 0;
+            double t1, t2, t3;
             READ_OFFSETS_WEIGHTED(src, &v, f_dt, weighted_f_dt);
+            t1 = tnow_us();
 
             /* merge into accumulator list */
             while (acc && (docno > acc->acc.docno)) {
                 prevptr = &acc->next;
                 acc = acc->next;
+                walk++;
             }
+            t2 = tnow_us();
 
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
@@ -489,7 +511,7 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
 
             } else {
                 struct search_acc_cons *newacc;
-                assert(!acc || docno < acc->acc.docno); 
+                assert(!acc || docno < acc->acc.docno);
 
                 /* allocate a new accumulator (we have reserved allocators
                  * earlier, so this should never fail) */
@@ -511,6 +533,14 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
             /* go to next accumulator */
             prevptr = &acc->next;
             acc = acc->next;
+
+            t3 = tnow_us();
+            zet_inner_decode_ms += (t1 - t0) / 1000.0;
+            zet_inner_walk_ms   += (t2 - t1) / 1000.0;
+            zet_inner_score_ms  += (t3 - t2) / 1000.0;
+            zet_inner_postings++;
+            zet_inner_walk_steps += walk;
+            t0 = tnow_us();
         }
 
         /* need to read more data, preserving bytes that we already have */
@@ -1203,8 +1233,12 @@ static enum search_ret thresh_decode_offsets(struct index *idx,
 
     while (1) {
         while (NEXT_DOC(&v, docno, f_dt)) {
+            double _t0 = tnow_us();
+            unsigned long _walk = 0;
+            double _t1, _t2;
             READ_OFFSETS_WEIGHTED(src, &v, f_dt, weighted_f_dt);
             decoded++;
+            _t1 = tnow_us();
 
             /* merge into accumulator list */
             while (acc && (docno > acc->acc.docno)) {
@@ -1220,7 +1254,13 @@ static enum search_ret thresh_decode_offsets(struct index *idx,
                     prevptr = &acc->next;
                     acc = acc->next;
                 }
+                _walk++;
             }
+            _t2 = tnow_us();
+            zet_inner_decode_ms += (_t1 - _t0) / 1000.0;
+            zet_inner_walk_ms   += (_t2 - _t1) / 1000.0;
+            zet_inner_postings++;
+            zet_inner_walk_steps += _walk;
 
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
