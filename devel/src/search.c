@@ -6,6 +6,21 @@
 
 #include "zettair.h"
 #include "search.h"
+#include <sys/time.h>
+
+/* Phase timing for the most recent index_search call. Read by commandline.c
+ * to emit into the JSON response.  Globals because we don't have a query-
+ * context object to thread them through cleanly. */
+double zet_phase_parse_ms   = 0.0;
+double zet_phase_eval_ms    = 0.0;
+double zet_phase_heap_ms    = 0.0;
+double zet_phase_summary_ms = 0.0;
+
+static inline double tnow_ms(void) {
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    return tv.tv_sec * 1000.0 + tv.tv_usec / 1000.0;
+}
 
 #include "_index.h"
 
@@ -1069,14 +1084,18 @@ static int res_score_cmp(const void *vone, const void *vtwo) {
     }
 }
 
-int index_search(struct index *idx, const char *querystr, 
-  unsigned long int startdoc, unsigned long int len, 
-  struct index_result *result, unsigned int *results, 
+int index_search(struct index *idx, const char *querystr,
+  unsigned long int startdoc, unsigned long int len,
+  struct index_result *result, unsigned int *results,
   double *total_results, int *tr_est, int opts, struct index_search_opt *opt) {
     struct query query;                  /* list of query terms/phrases */
     struct objalloc *acc_alloc;          /* allocator for accumulators */
-    struct alloc list_alloc;             /* memory allocator for query 
+    struct alloc list_alloc;             /* memory allocator for query
                                           * resolution */
+    double tphase;                       /* phase timer */
+    zet_phase_parse_ms = zet_phase_eval_ms = 0.0;
+    zet_phase_heap_ms  = zet_phase_summary_ms = 0.0;
+    tphase = tnow_ms();
     struct search_acc_cons *acc = NULL;  /* accumulators */
     struct chash *hashacc = NULL;        /* hashed accumulators */
     unsigned int accs = 0,               /* number of accumulators */
@@ -1225,6 +1244,9 @@ int index_search(struct index *idx, const char *querystr,
         return 0;
     }
 
+    zet_phase_parse_ms = tnow_ms() - tphase;
+    tphase = tnow_ms();
+
     /* evaluate the query (Okapi BM25 only) */
     {
         struct search_metric_results results
@@ -1238,6 +1260,7 @@ int index_search(struct index *idx, const char *querystr,
         *total_results = results.total_results;
         *tr_est = results.estimated;
     }
+    zet_phase_eval_ms = tnow_ms() - tphase;
     if (list_alloc.opaque) {
         poolalloc_delete(list_alloc.opaque);
     }
@@ -1253,13 +1276,16 @@ int index_search(struct index *idx, const char *querystr,
     }
 
     if (ret == SEARCH_OK) {
+        tphase = tnow_ms();
         /* select top accumulators as results */
-        *results 
+        *results
           = index_heap_select(idx, result, startdoc, len, acc, accs, hashacc);
         assert(*results <= len);
         if (hashacc) {
             chash_delete(hashacc);
         }
+        zet_phase_heap_ms = tnow_ms() - tphase;
+        tphase = tnow_ms();
 
         /* summarise the selected results if necessary */
         if (summary_type != INDEX_SUMMARISE_NONE) {
@@ -1297,6 +1323,7 @@ int index_search(struct index *idx, const char *querystr,
                 return 0;
             }
         }
+        zet_phase_summary_ms = tnow_ms() - tphase;
     }
 
     /* free terms allocated */

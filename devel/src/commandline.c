@@ -1144,9 +1144,16 @@ int search(struct index *idx, const char *query, struct index_result *result,
                     fprintf(stdout, "{\"rank\":%u,\"docno\":\"%s\",\"score\":%.2f,\"docid\":%lu,\"summary\":\"%s\"}\n",
                           start + i + 1, escbuf, result[i].score, result[i].docno, sumbuf);
                 }
-                /* sentinel */
-                fprintf(stdout, "{\"done\":true,\"count\":%u,\"total\":%.0f,\"took_ms\":%.2f}\n",
-                      results, total_results, seconds * 1000.0);
+                /* sentinel including per-phase timing for profiling */
+                {
+                    extern double zet_phase_parse_ms, zet_phase_eval_ms,
+                                  zet_phase_heap_ms, zet_phase_summary_ms;
+                    fprintf(stdout, "{\"done\":true,\"count\":%u,\"total\":%.0f,\"took_ms\":%.2f,"
+                          "\"parse_ms\":%.2f,\"eval_ms\":%.2f,\"heap_ms\":%.2f,\"summary_ms\":%.2f}\n",
+                          results, total_results, seconds * 1000.0,
+                          zet_phase_parse_ms, zet_phase_eval_ms,
+                          zet_phase_heap_ms, zet_phase_summary_ms);
+                }
                 fflush(stdout);
             } else {
                 for (i = 0; i < results; i++) {
