@@ -64,6 +64,10 @@ static double g_field_boost[POSTINGS_MAX_FIELDS] = {
     1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
 };
 static int g_field_boost_loaded = 0;
+/* Fast-path flag: 1 = all boosts are 1.0, so the field-weight sum equals
+ * f_dt and we can skip the per-occurrence walk entirely (pure scan).
+ * Set by okapi_load_field_boosts based on env vars. */
+static int g_field_boost_active = 0;
 
 void okapi_load_field_boosts(void) {
     static const struct { const char *name; unsigned int field; } envs[] = {
@@ -84,6 +88,18 @@ void okapi_load_field_boosts(void) {
                 g_field_boost[envs[i].field] = d;
                 fprintf(stderr, "[field_boost] %s = %.2f (field_id=%u)\n",
                         envs[i].name, d, envs[i].field);
+            }
+        }
+    }
+    /* Recompute the active flag: if every boost is 1.0, we can skip
+     * per-occurrence accumulation and use the original SCAN_OFFSETS path. */
+    {
+        int i;
+        g_field_boost_active = 0;
+        for (i = 0; i < POSTINGS_MAX_FIELDS; i++) {
+            if (g_field_boost[i] != 1.0) {
+                g_field_boost_active = 1;
+                break;
             }
         }
     }
@@ -299,32 +315,37 @@ static enum search_ret post(struct index *idx, struct query *query, struct searc
  * (weighted) instead of just counting them.  Used in the okapi scoring
  * loops so that title (and future field) hits count more.
  *
- * Optimization: the encoded offset is (gap << POSTINGS_FIELD_BITS) | field_id.
+ * Optimization 1: the encoded offset is (gap << POSTINGS_FIELD_BITS) | field_id.
  * vbyte stores the low 7 bits of a value in the first byte. The field_id
  * therefore lives in the low POSTINGS_FIELD_BITS bits of the FIRST byte of
  * each vbyte sequence — we don't need to decode the full value, just peek
  * the first byte and then skip continuation bytes (high-bit-set).
- * Same cost shape as the old SCAN_OFFSETS, plus one array lookup per offset.
+ *
+ * Optimization 2: when no field has a non-trivial boost (g_field_boost_active
+ * == 0), the weighted sum equals f_dt exactly. Skip the per-byte accumulation
+ * and use the original SCAN_OFFSETS path (just walk continuation bytes).
  *
  * weighted: double accumulator. f_dt: number of offsets. v: struct vec *. */
 #define READ_OFFSETS_WEIGHTED(src, v, f_dt, weighted)                         \
     do {                                                                      \
         unsigned int toread = f_dt;                                           \
         enum search_ret sret;                                                 \
-        unsigned char *p, *e, b;                                              \
+        unsigned char *p, *e;                                                 \
+        if (!g_field_boost_active) {                                          \
+            /* fast path: no boost active, sum equals f_dt; just skip past */ \
+            SCAN_OFFSETS(src, v, f_dt);                                       \
+            (weighted) = (double)(f_dt);                                      \
+            break;                                                            \
+        }                                                                     \
         (weighted) = 0.0;                                                     \
         while (toread) {                                                      \
             p = (unsigned char *)(v)->pos;                                    \
             e = (unsigned char *)(v)->end;                                    \
-            /* fast path: scan as many full vbyte sequences as the current    \
-             * buffer holds, accumulating field-weights from the first byte   \
-             * of each */                                                     \
             while (toread && p < e) {                                         \
                 unsigned char *start = p;                                     \
                 /* walk continuation bytes (high bit set) */                  \
                 while (p < e && (*p & 0x80)) p++;                             \
                 if (p < e) {                                                  \
-                    /* p now points at terminating byte; vbyte complete */    \
                     (weighted) += g_field_boost[*start & POSTINGS_FIELD_MASK];\
                     p++;                                                      \
                     toread--;                                                 \
@@ -336,7 +357,6 @@ static enum search_ret post(struct index *idx, struct query *query, struct searc
             }                                                                 \
             (v)->pos = (char *)p;                                             \
             if (toread) {                                                     \
-                /* need more data */                                          \
                 if ((sret = src->read(src, VEC_LEN(v),                        \
                     (void **) &(v)->pos, &bytes)) == SEARCH_OK) {             \
                     (v)->end = (v)->pos + bytes;                              \
