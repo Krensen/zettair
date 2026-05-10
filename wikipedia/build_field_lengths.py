@@ -8,6 +8,9 @@ Outputs (in cwd):
   field_lengths.bin  — N_docs * NUM_FIELDS * uint32, field_id 0=body, 1=title, etc.
   field_stats.bin    — header + (avg_len, n_docs_with_field) per field
 
+Streams the TREC file line-by-line so it works on the 14 GB production
+file inside an 8 GB box.
+
 For now we only count body and title; other fields are reserved (lengths=0).
 
 Usage:
@@ -18,11 +21,6 @@ import struct
 import sys
 
 NUM_FIELDS = 16  # matches POSTINGS_MAX_FIELDS
-
-DOC_RE = re.compile(r"<DOC>\s*(.*?)\s*</DOC>", re.DOTALL)
-DOCNO_RE = re.compile(r"<DOCNO>(.*?)</DOCNO>", re.DOTALL)
-TITLE_RE = re.compile(r"<TITLE>(.*?)</TITLE>", re.DOTALL)
-TEXT_RE = re.compile(r"<TEXT>(.*?)</TEXT>", re.DOTALL)
 WORD_RE = re.compile(r"[A-Za-z0-9]+")
 
 
@@ -36,61 +34,108 @@ def main():
         sys.exit(1)
     trec_path = sys.argv[1]
 
-    with open(trec_path, encoding="utf-8") as f:
-        content = f.read()
+    # Streaming state machine. We track whether we're currently inside a
+    # <TITLE> or <TEXT> tag and accumulate the word count for each per
+    # document. Tags are assumed to be opened/closed on their own lines —
+    # which matches what wiki2trec.py emits.
+    in_title = False
+    in_text = False
+    title_words = 0
+    text_words = 0
+    n_docs = 0
+    sum_body = 0
+    sum_title = 0
+    n_with_body = 0
+    n_with_title = 0
 
-    docs = DOC_RE.findall(content)
-    print(f"Found {len(docs)} docs")
+    f_out = open("field_lengths.bin", "wb")
+    pack_uint = struct.Struct("I").pack
+    zero_field = pack_uint(0)
 
-    # field_lengths[doc_idx * NUM_FIELDS + field_id] = word_count
-    field_lengths = [0] * (len(docs) * NUM_FIELDS)
-    sum_len = [0] * NUM_FIELDS
-    n_with = [0] * NUM_FIELDS
+    def emit_doc(body_len, title_len):
+        # Write one row of NUM_FIELDS uint32s. Body=field 0, title=field 1,
+        # everything else zero (reserved).
+        row = [pack_uint(0)] * NUM_FIELDS
+        row[0] = pack_uint(body_len)
+        row[1] = pack_uint(title_len)
+        f_out.write(b"".join(row))
 
-    for i, doc in enumerate(docs):
-        title_m = TITLE_RE.search(doc)
-        text_m = TEXT_RE.search(doc)
-        title = title_m.group(1) if title_m else ""
-        text = text_m.group(1) if text_m else ""
+    with open(trec_path, "rb") as f:
+        for raw in f:
+            # Decode permissively — corpus is mostly UTF-8 but some pages
+            # have stray bytes. We only do regex word matching, so latin-1
+            # is safe and never raises.
+            line = raw.decode("utf-8", errors="replace")
+            stripped = line.strip()
 
-        # Body length: <TEXT> minus the title prefix. wiki2trec emits
-        # `{title}. {text}` inside <TEXT> so we want to count title-words
-        # ONCE — as a title field length — not double-count them as body.
-        # Simplest: body length = total <TEXT> word count. Title length
-        # is the count of words in <TITLE>. That mirrors the index: each
-        # word's posting carries the field_id where it occurred, and the
-        # title words appear twice in the index (once as title, once as
-        # body — because wiki2trec leaves the title at the start of <TEXT>).
-        # Length-norm should reflect that doubling, since BM25 sees both.
-        title_len = count_words(title)
-        body_len = count_words(text)  # includes the title-prefix words
+            if stripped.startswith("<TITLE>"):
+                # could be one-line: "<TITLE>foo</TITLE>" or multi-line
+                inner = stripped[len("<TITLE>"):]
+                end = inner.find("</TITLE>")
+                if end >= 0:
+                    title_words += count_words(inner[:end])
+                else:
+                    title_words += count_words(inner)
+                    in_title = True
+                continue
+            if in_title:
+                end = stripped.find("</TITLE>")
+                if end >= 0:
+                    title_words += count_words(stripped[:end])
+                    in_title = False
+                else:
+                    title_words += count_words(stripped)
+                continue
 
-        title_len_field = title_len
-        body_len_field = body_len  # all words in <TEXT> are body postings
+            if stripped == "<TEXT>":
+                in_text = True
+                continue
+            if in_text:
+                if stripped == "</TEXT>":
+                    in_text = False
+                    continue
+                text_words += count_words(line)
+                continue
 
-        field_lengths[i * NUM_FIELDS + 0] = body_len_field
-        field_lengths[i * NUM_FIELDS + 1] = title_len_field
-        if body_len_field > 0:
-            n_with[0] += 1
-            sum_len[0] += body_len_field
-        if title_len_field > 0:
-            n_with[1] += 1
-            sum_len[1] += title_len_field
+            if stripped == "</DOC>":
+                # finalise this doc
+                emit_doc(text_words, title_words)
+                if text_words > 0:
+                    sum_body += text_words
+                    n_with_body += 1
+                if title_words > 0:
+                    sum_title += title_words
+                    n_with_title += 1
+                n_docs += 1
+                if n_docs % 100000 == 0:
+                    print(f"  {n_docs:,} docs processed", flush=True)
+                title_words = 0
+                text_words = 0
+                continue
 
-    # Write field_lengths.bin
-    with open("field_lengths.bin", "wb") as f:
-        f.write(struct.pack(f"{len(field_lengths)}I", *field_lengths))
-    print(f"Wrote field_lengths.bin: {len(field_lengths)} entries ({len(field_lengths)*4} bytes)")
+    f_out.close()
+    print(f"Total docs: {n_docs:,}")
+    print(f"Wrote field_lengths.bin: {n_docs * NUM_FIELDS} entries ({n_docs * NUM_FIELDS * 4} bytes)")
 
     # Write field_stats.bin: header (n_docs, num_fields) + per-field (avg_len, n_with)
     with open("field_stats.bin", "wb") as f:
-        f.write(struct.pack("II", len(docs), NUM_FIELDS))
+        f.write(struct.pack("II", n_docs, NUM_FIELDS))
         for fld in range(NUM_FIELDS):
-            avg = (sum_len[fld] / n_with[fld]) if n_with[fld] > 0 else 0.0
-            f.write(struct.pack("dI", avg, n_with[fld]))
-    print(f"Wrote field_stats.bin: avg body={sum_len[0]/max(n_with[0],1):.1f}, "
-          f"avg title={sum_len[1]/max(n_with[1],1):.1f} "
-          f"({n_with[1]}/{len(docs)} docs have title)")
+            if fld == 0:
+                avg = (sum_body / n_with_body) if n_with_body > 0 else 0.0
+                nw = n_with_body
+            elif fld == 1:
+                avg = (sum_title / n_with_title) if n_with_title > 0 else 0.0
+                nw = n_with_title
+            else:
+                avg = 0.0
+                nw = 0
+            f.write(struct.pack("dI", avg, nw))
+    avg_body = sum_body / max(n_with_body, 1)
+    avg_title = sum_title / max(n_with_title, 1)
+    print(f"Wrote field_stats.bin: avg body={avg_body:.1f}, "
+          f"avg title={avg_title:.1f} "
+          f"({n_with_title}/{n_docs} docs have title)")
 
 
 if __name__ == "__main__":
