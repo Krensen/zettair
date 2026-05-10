@@ -28,12 +28,22 @@ struct postings;
 struct vec;
 struct stop;
 
+/* number of bits reserved for field_id at the bottom of each encoded offset */
+#define POSTINGS_FIELD_BITS 4
+#define POSTINGS_FIELD_MASK ((1u << POSTINGS_FIELD_BITS) - 1)
+#define POSTINGS_MAX_FIELDS (1u << POSTINGS_FIELD_BITS)
+
 /* structure to allow returning of statistics from update.  More per
  * document stats can easily be added and calculated */
 struct postings_docstats {
     unsigned weight;                   /* vector space length of document */
     unsigned int terms;                /* number of terms in document */
     unsigned int distinct;             /* number of distinct terms in document*/
+    /* PRD-019: per-field term counts. terms_per_field[f] = number of
+     * tokens added to the current document with field_id == f. The sum
+     * over f equals `terms`. Used to write per-doc field lengths to the
+     * field_lengths sidecar at index time. */
+    unsigned int terms_per_field[POSTINGS_MAX_FIELDS];
 };
 
 /* constructor, creates a new (empty) postings list.  tablesize is
@@ -68,11 +78,6 @@ void postings_adddoc(struct postings *post, unsigned long int docno);
  * a single call can only carry one field_id for all its terms. */
 int postings_addwords(struct postings *post, char *text, unsigned int len,
                       unsigned int field_id);
-
-/* number of bits reserved for field_id at the bottom of each encoded offset */
-#define POSTINGS_FIELD_BITS 4
-#define POSTINGS_FIELD_MASK ((1u << POSTINGS_FIELD_BITS) - 1)
-#define POSTINGS_MAX_FIELDS (1u << POSTINGS_FIELD_BITS)
 
 /* whether postings list needs an update */
 int postings_needs_update(struct postings *post);

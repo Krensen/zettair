@@ -76,6 +76,7 @@ struct postings* postings_new(unsigned int tablesize,
         p->tblsize = tablesize;
         assert(p->tblbits && p->tblsize);
         p->size = p->dterms = p->terms = 0;
+        memset(p->terms_per_field, 0, sizeof(p->terms_per_field));
         p->err = 0;
         p->docno = 0;
         p->termno = 0;
@@ -224,6 +225,11 @@ int postings_update(struct postings* post, struct postings_docstats* stats) {
     stats->weight = sqrtf(weight);
     stats->terms = terms;
     stats->distinct = dterms;
+    /* PRD-019: copy per-field counts (accumulated in postings_addwords
+     * for the current doc) into stats, then reset for the next doc. */
+    memcpy(stats->terms_per_field, post->terms_per_field,
+           sizeof(stats->terms_per_field));
+    memset(post->terms_per_field, 0, sizeof(post->terms_per_field));
     return 1;
 }
 
@@ -236,6 +242,10 @@ void postings_adddoc(struct postings* post, unsigned long int docno) {
     post->docs++;
     /* this ensures that updates happen even for empty documents! */
     post->update_required = 1;
+    /* PRD-019: per-field counts are accumulated across postings_addwords
+     * calls until postings_update flushes them to stats. Reset here in
+     * case the previous doc didn't end with an update. */
+    memset(post->terms_per_field, 0, sizeof(post->terms_per_field));
 }
 
 int postings_addwords(struct postings *post, char *text, unsigned int textlen,
@@ -362,6 +372,7 @@ int postings_addwords(struct postings *post, char *text, unsigned int textlen,
         node->last_offset = post->termno++;
         node->offsets++;
         post->terms++;
+        post->terms_per_field[field_id]++;  /* PRD-019 */
         term = next;
     }
     return 1;
@@ -579,6 +590,7 @@ int postings_dump(struct postings* post, void *buf, unsigned int bufsize,
     post->size = 0;
     post->dterms = 0;
     post->terms = 0;
+    memset(post->terms_per_field, 0, sizeof(post->terms_per_field));
     post->docs = 0;
     poolalloc_clear(post->string_mem);
     objalloc_clear(post->node_mem);
@@ -611,6 +623,7 @@ void postings_clear(struct postings* post) {
     post->size = 0;
     post->dterms = 0;
     post->terms = 0;
+    memset(post->terms_per_field, 0, sizeof(post->terms_per_field));
     post->docs = 0;
     poolalloc_clear(post->string_mem);
     objalloc_clear(post->node_mem);

@@ -480,6 +480,13 @@ struct index *index_new(const char *name, const char *config,
     idx->impact_stats.quant_bits = 0;
     idx->impact_stats.w_qt_min = 0;
     idx->impact_stats.w_qt_max = 0;
+    /* PRD-019: per-field BM25 sidecar state (open lazily on first
+     * doc in index_addfile; close+stats-write in index_commit). */
+    idx->field_lengths_fp = NULL;
+    idx->docno_map_fp = NULL;
+    idx->index_name = name ? str_dup(name) : NULL;
+    memset(idx->sum_field_words, 0, sizeof(idx->sum_field_words));
+    memset(idx->n_with_field,    0, sizeof(idx->n_with_field));
     zpthread_mutex_init(&idx->vocab_mutex, NULL);
     zpthread_mutex_init(&idx->docmap_mutex, NULL);
     zpthread_mutex_init(&idx->perquery_mutex, NULL);
@@ -721,6 +728,13 @@ struct index *index_load(const char *name, unsigned int memory, int opts,
     idx->params.tblsize = TABLESIZE;
     idx->params.parsebuf = PARSE_BUFFER;
     idx->stem = NULL;
+    /* PRD-019: load-time we don't write sidecars, but stash the name so
+     * okapi_load_perfield can find <name>.field_lengths and
+     * <name>.field_stats without an env var. */
+    idx->field_lengths_fp = NULL;
+    idx->index_name = name ? str_dup(name) : NULL;
+    memset(idx->sum_field_words, 0, sizeof(idx->sum_field_words));
+    memset(idx->n_with_field,    0, sizeof(idx->n_with_field));
     zpthread_mutex_init(&idx->vocab_mutex, NULL);
     zpthread_mutex_init(&idx->docmap_mutex, NULL);
     zpthread_mutex_init(&idx->perquery_mutex, NULL);
@@ -1250,6 +1264,22 @@ void index_delete(struct index *idx) {
       && zpthread_mutex_lock(&idx->docmap_mutex) == ZPTHREAD_OK
       && zpthread_mutex_lock(&idx->perquery_mutex) == ZPTHREAD_OK) {
 
+        /* PRD-019: close field-lengths sidecar and write field-stats.
+         * If we got here without going through index_commit (e.g. on
+         * error), we still want a coherent (possibly partial) sidecar. */
+        if (idx->field_lengths_fp) {
+            fclose(idx->field_lengths_fp);
+            idx->field_lengths_fp = NULL;
+        }
+        if (idx->docno_map_fp) {
+            fclose(idx->docno_map_fp);
+            idx->docno_map_fp = NULL;
+        }
+        if (idx->index_name) {
+            free(idx->index_name);
+            idx->index_name = NULL;
+        }
+
         /* first, save the docmap */
         if (idx->map) {
             docmap_delete(idx->map);
@@ -1596,6 +1626,62 @@ int index_add(struct index *idx, const char *file, const char *mimetype,
                     }
                     assert(docno_out == mi->docs - 1);
                     last_pos = curr_pos;
+
+                    /* PRD-019: write per-field word counts to sidecar.
+                     * Lazy open on first doc; one row per doc, in docno
+                     * order (matching the index because docno_out is
+                     * assigned monotonically here). */
+                    if (idx->index_name && !idx->field_lengths_fp) {
+                        char *path = malloc(strvlen(idx->index_name) + 32);
+                        if (path) {
+                            sprintf(path, "%s.field_lengths", idx->index_name);
+                            idx->field_lengths_fp = fopen(path, "wb");
+                            if (!idx->field_lengths_fp) {
+                                fprintf(stderr,
+                                    "[perfield] could not open %s for writing\n",
+                                    path);
+                            }
+                            free(path);
+                        }
+                    }
+                    if (idx->field_lengths_fp) {
+                        uint32_t row[POSTINGS_MAX_FIELDS];
+                        unsigned int f;
+                        for (f = 0; f < POSTINGS_MAX_FIELDS; f++) {
+                            row[f] = mi->stats.terms_per_field[f];
+                            if (row[f] > 0) {
+                                idx->sum_field_words[f] += row[f];
+                                idx->n_with_field[f]++;
+                            }
+                        }
+                        if (fwrite(row, sizeof(row), 1,
+                                   idx->field_lengths_fp) != 1) {
+                            fprintf(stderr,
+                                "[perfield] short write to field_lengths\n");
+                        }
+                    }
+
+                    /* Phase 2: append (docid, docno) line to docno_map
+                     * sidecar. Same lazy-open pattern. Used by the
+                     * click-prior builder so it doesn't have to re-parse
+                     * the TREC and risk a docid mismatch. */
+                    if (idx->index_name && !idx->docno_map_fp) {
+                        char *path = malloc(strvlen(idx->index_name) + 32);
+                        if (path) {
+                            sprintf(path, "%s.docno_map.tsv", idx->index_name);
+                            idx->docno_map_fp = fopen(path, "w");
+                            if (!idx->docno_map_fp) {
+                                fprintf(stderr,
+                                    "[docno_map] could not open %s for writing\n",
+                                    path);
+                            }
+                            free(path);
+                        }
+                    }
+                    if (idx->docno_map_fp) {
+                        fprintf(idx->docno_map_fp, "%lu\t%s\n",
+                                docno_out, aux_docno);
+                    }
                 } else {
                     FAIL();
                 }
@@ -1814,6 +1900,51 @@ static int stat_update(struct index *idx) {
     return 1;
 }
 
+/* PRD-019: close <name>.field_lengths and write <name>.field_stats.
+ * Phase 2: also close <name>.docno_map.tsv. Called at successful commit.
+ * Stats file format:
+ *   uint32 n_docs   (docmap entry count)
+ *   uint32 n_fields (POSTINGS_MAX_FIELDS)
+ *   per field: double avg_len, uint32 n_with    (16 entries) */
+static void perfield_finalise(struct index *idx) {
+    char *path;
+    FILE *f;
+    unsigned int i;
+    uint32_t n_docs, n_fields = POSTINGS_MAX_FIELDS;
+
+    if (!idx->index_name) return;
+
+    if (idx->field_lengths_fp) {
+        fclose(idx->field_lengths_fp);
+        idx->field_lengths_fp = NULL;
+    }
+    if (idx->docno_map_fp) {
+        fclose(idx->docno_map_fp);
+        idx->docno_map_fp = NULL;
+    }
+
+    n_docs = (uint32_t)docmap_entries(idx->map);
+
+    path = malloc(strvlen(idx->index_name) + 32);
+    if (!path) return;
+    sprintf(path, "%s.field_stats", idx->index_name);
+    f = fopen(path, "wb");
+    free(path);
+    if (!f) return;
+
+    fwrite(&n_docs,   sizeof(uint32_t), 1, f);
+    fwrite(&n_fields, sizeof(uint32_t), 1, f);
+    for (i = 0; i < POSTINGS_MAX_FIELDS; i++) {
+        double avg = idx->n_with_field[i] > 0
+            ? idx->sum_field_words[i] / (double)idx->n_with_field[i]
+            : 0.0;
+        uint32_t nw = idx->n_with_field[i];
+        fwrite(&avg, sizeof(double),   1, f);
+        fwrite(&nw,  sizeof(uint32_t), 1, f);
+    }
+    fclose(f);
+}
+
 int index_commit_internal(struct index *idx,
   unsigned int opts, struct index_commit_opt *opt,
   unsigned int addopts, struct index_add_opt *addopt) {
@@ -1829,6 +1960,7 @@ int index_commit_internal(struct index *idx,
       && index_commit_superblock(idx)) {
 
         /* construction succeeded */
+        perfield_finalise(idx);   /* PRD-019 */
         return 1;
 
     } else if ((idx->flags & INDEX_BUILT)
@@ -1839,6 +1971,7 @@ int index_commit_internal(struct index *idx,
         /* succeeded, clear accumulated postings */
         postings_clear(idx->post);
         idx->stats.updates++;
+        perfield_finalise(idx);   /* PRD-019 */
         return 1;
 
     } else {

@@ -1,6 +1,6 @@
 /* _postings.h contains the private declarations of the postings
  * module, which need to be exposed to some other modules for
- * efficiency reasons 
+ * efficiency reasons
  *
  * written nml 2003-04-30
  *
@@ -9,6 +9,7 @@
 #ifndef PRIVATE_POSTINGS_H
 #define PRIVATE_POSTINGS_H
 
+#include "postings.h"
 #include "vec.h"
 
 struct postings_node {
@@ -32,6 +33,7 @@ struct postings {
     unsigned int tblbits;             /* log2(tblsize) */
     unsigned int dterms;              /* number of items (distinct terms) */
     unsigned int terms;               /* total number of terms in postings */
+    unsigned int terms_per_field[POSTINGS_MAX_FIELDS];  /* PRD-019 */
     unsigned int size;                /* current size of postings */
     unsigned int docs;                /* current number of documents */
     struct poolalloc *string_mem;     /* allocator for strings */

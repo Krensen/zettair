@@ -1,6 +1,17 @@
 #!/usr/bin/env python3
 """
-build_docno_map.py — Extract title → internal docno mapping from a TREC file.
+build_docno_map.py — DEPRECATED. zet now emits <index>.docno_map.tsv at
+index-build time, with the docids assigned by zet's own parser. Use
+that file directly (e.g. via build_click_prior.py --index <path>) instead
+of running this script — it just re-parses the TREC and risks drifting
+from zet's own assignment.
+
+Kept temporarily for compatibility with old setup paths. Will be removed
+once nothing references it.
+
+Original docs:
+
+Extract title → internal docno mapping from a TREC file.
 
 Zettair assigns docnos sequentially in the order documents appear in the TREC
 file. So docno 0 = first <DOCNO> tag, docno 1 = second, etc.

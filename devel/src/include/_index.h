@@ -14,7 +14,10 @@ extern "C" {
 
 #include "zettair.h"
 
+#include <stdio.h>
+
 #include "index.h"
+#include "postings.h"
 #include "storagep.h"
 #include "stream.h"
 #include "vocab.h"
@@ -74,6 +77,24 @@ struct index {
     struct postings *post;              /* accumulated in-memory postings */
     struct pyramid *merger;             /* pointers to dumped postings */
     struct storagep storage;            /* storage parameters */
+
+    /* PRD-019: per-field BM25 sidecars, written during indexing.
+     * Open in index_new, written per doc in index_addfile, closed and
+     * supplemented with field_stats.bin in index_commit. NULL when
+     * loading an existing index (read path goes through okapi_load_perfield). */
+    FILE *field_lengths_fp;             /* <name>.field_lengths */
+    char *index_name;                   /* index name prefix (strdup of `name`) */
+    /* Per-field corpus accumulators — written to <name>.field_stats at
+     * commit time. Indexed by field_id. */
+    double sum_field_words[POSTINGS_MAX_FIELDS];
+    unsigned int n_with_field[POSTINGS_MAX_FIELDS];
+
+    /* Phase 2: docno → docid map sidecar, written during indexing.
+     * Lives at <name>.docno_map.tsv, lines `docid\tdocno`. Used by
+     * build_click_prior.py to align click counts with the live index
+     * docid space — replaces the standalone build_docno_map.py which
+     * re-parsed the TREC and risked drifting from zet's own parse. */
+    FILE *docno_map_fp;
 
     /* 'types' for accessing files through the fdset */
     unsigned int param_type;            /* index parameter file type */

@@ -135,9 +135,13 @@ void okapi_load_field_boosts(void) {
 }
 
 /* PRD-019: load per-field BM25 sidecars and config. Activated by setting
- * ZET_PERFIELD_BM25=1. Reads field_lengths.bin and field_stats.bin from
- * paths set by ZET_FIELD_LENGTHS_PATH and ZET_FIELD_STATS_PATH. Reads
- * per-field w and b from ZET_FIELD_W_<NAME> and ZET_FIELD_B_<NAME>. */
+ * ZET_PERFIELD_BM25=1. Sidecar paths are derived from ZET_INDEX (the
+ * --filename / -f argument that produced the index) — sidecars live at
+ * <index>.field_lengths and <index>.field_stats, written by index.c at
+ * index-build time. ZET_FIELD_LENGTHS_PATH and ZET_FIELD_STATS_PATH
+ * still work as overrides if you need to point at a sidecar from a
+ * different index for testing. Reads per-field w and b from
+ * ZET_FIELD_W_<NAME> and ZET_FIELD_B_<NAME>. */
 void okapi_load_perfield(void) {
     static const struct { const char *suffix; unsigned int field; } envs[] = {
         {"BODY",     0},
@@ -148,8 +152,12 @@ void okapi_load_perfield(void) {
         {"INFOBOX",  5},
     };
     const char *enable;
-    const char *lengths_path;
-    const char *stats_path;
+    char *lengths_path = NULL;
+    char *stats_path   = NULL;
+    int  lengths_owned = 0, stats_owned = 0;
+    const char *override_lengths;
+    const char *override_stats;
+    const char *index_path;
     FILE *f;
     long sz;
     unsigned int n_docs_h, n_fields_h;
@@ -163,11 +171,34 @@ void okapi_load_perfield(void) {
         return;  /* not enabled */
     }
 
-    lengths_path = getenv("ZET_FIELD_LENGTHS_PATH");
-    stats_path   = getenv("ZET_FIELD_STATS_PATH");
+    override_lengths = getenv("ZET_FIELD_LENGTHS_PATH");
+    override_stats   = getenv("ZET_FIELD_STATS_PATH");
+    index_path       = getenv("ZET_INDEX");
+    if (override_lengths) {
+        lengths_path = (char *)override_lengths;
+    } else if (index_path) {
+        size_t n = strlen(index_path) + 32;
+        lengths_path = malloc(n);
+        if (lengths_path) {
+            snprintf(lengths_path, n, "%s.field_lengths", index_path);
+            lengths_owned = 1;
+        }
+    }
+    if (override_stats) {
+        stats_path = (char *)override_stats;
+    } else if (index_path) {
+        size_t n = strlen(index_path) + 32;
+        stats_path = malloc(n);
+        if (stats_path) {
+            snprintf(stats_path, n, "%s.field_stats", index_path);
+            stats_owned = 1;
+        }
+    }
     if (!lengths_path || !stats_path) {
-        fprintf(stderr, "[perfield] ZET_PERFIELD_BM25 set but "
-                "ZET_FIELD_LENGTHS_PATH or ZET_FIELD_STATS_PATH unset; disabled\n");
+        fprintf(stderr, "[perfield] ZET_PERFIELD_BM25 set but cannot resolve "
+                "sidecar paths (need ZET_INDEX or ZET_FIELD_*_PATH); disabled\n");
+        if (lengths_owned) free(lengths_path);
+        if (stats_owned)   free(stats_path);
         return;
     }
 
@@ -175,7 +206,7 @@ void okapi_load_perfield(void) {
     f = fopen(lengths_path, "rb");
     if (!f) {
         fprintf(stderr, "[perfield] could not open %s; disabled\n", lengths_path);
-        return;
+        goto cleanup_paths;
     }
     fseek(f, 0, SEEK_END);
     sz = ftell(f);
@@ -184,21 +215,21 @@ void okapi_load_perfield(void) {
         fprintf(stderr, "[perfield] %s has unexpected size %ld; disabled\n",
                 lengths_path, sz);
         fclose(f);
-        return;
+        goto cleanup_paths;
     }
     g_field_lengths_ndocs = (unsigned int)(sz / (sizeof(uint32_t) * POSTINGS_MAX_FIELDS));
     g_field_lengths = (uint32_t *)malloc(sz);
     if (!g_field_lengths) {
         fprintf(stderr, "[perfield] OOM allocating field_lengths; disabled\n");
         fclose(f);
-        return;
+        goto cleanup_paths;
     }
     if (fread(g_field_lengths, 1, sz, f) != (size_t)sz) {
         fprintf(stderr, "[perfield] short read on %s; disabled\n", lengths_path);
         free(g_field_lengths);
         g_field_lengths = NULL;
         fclose(f);
-        return;
+        goto cleanup_paths;
     }
     fclose(f);
 
@@ -209,7 +240,7 @@ void okapi_load_perfield(void) {
         fprintf(stderr, "[perfield] could not open %s; disabled\n", stats_path);
         free(g_field_lengths);
         g_field_lengths = NULL;
-        return;
+        goto cleanup_paths;
     }
     if (fread(&n_docs_h,   sizeof(uint32_t), 1, f) != 1 ||
         fread(&n_fields_h, sizeof(uint32_t), 1, f) != 1) {
@@ -217,7 +248,7 @@ void okapi_load_perfield(void) {
         free(g_field_lengths);
         g_field_lengths = NULL;
         fclose(f);
-        return;
+        goto cleanup_paths;
     }
     if (n_docs_h != g_field_lengths_ndocs || n_fields_h != POSTINGS_MAX_FIELDS) {
         fprintf(stderr, "[perfield] sidecar header mismatch (docs=%u fields=%u); disabled\n",
@@ -225,7 +256,7 @@ void okapi_load_perfield(void) {
         free(g_field_lengths);
         g_field_lengths = NULL;
         fclose(f);
-        return;
+        goto cleanup_paths;
     }
     for (i = 0; i < POSTINGS_MAX_FIELDS; i++) {
         double avg;
@@ -236,7 +267,7 @@ void okapi_load_perfield(void) {
             free(g_field_lengths);
             g_field_lengths = NULL;
             fclose(f);
-            return;
+            goto cleanup_paths;
         }
         g_field_avg_len[i] = avg;
         g_field_n_with[i]  = nw;
@@ -273,6 +304,10 @@ void okapi_load_perfield(void) {
                     g_field_w[i], g_field_b[i]);
         }
     }
+
+cleanup_paths:
+    if (lengths_owned) free(lengths_path);
+    if (stats_owned)   free(stats_path);
 }
 
 void okapi_load_prior(const char *path, double alpha) {

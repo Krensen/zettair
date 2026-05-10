@@ -3,15 +3,19 @@
 build_click_prior.py — Aggregate clickstream → click_prior.bin
 
 Reads all clickstream files, applies monthly decay, outputs a binary
-float32 array indexed by Zettair internal docno.
+float32 array indexed by Zettair internal docid.
 
-Output: click_prior.bin  (256,523 × 4 bytes = ~1MB)
+Source of truth for docno→docid: <index>.docno_map.tsv emitted directly
+by zet at index time (no separate Python TREC parse). Pass --index
+<path> to point at the index. Falls back to ./docno_map.tsv (the legacy
+build_docno_map.py output) if --index is not given AND the legacy file
+exists; the legacy path is deprecated and will be removed.
+
+Output: <index>.click_prior.bin (default) or --out PATH.
 """
-import gzip, json, os, re, struct, sys, time
+import argparse, gzip, json, os, re, struct, sys, time
 
 HERE       = os.path.dirname(os.path.abspath(__file__))
-DOCNO_MAP  = os.path.join(HERE, 'docno_map.tsv')
-OUTPUT     = os.path.join(HERE, 'click_prior.bin')
 LOG_DIR    = os.environ.get('CLICKSTREAM_LOG_DIR', os.path.join(HERE, 'logs'))
 LOG_FILE   = os.path.join(LOG_DIR, 'clickstream_refresh.jsonl')
 
@@ -33,11 +37,11 @@ def months_ago(ym, reference):
     y2, m2 = int(reference[:4]), int(reference[5:])
     return (y2 - y1) * 12 + (m2 - m1)
 
-def load_docno_map():
+def load_docno_map(path):
     """Returns title -> internal_docno dict, and total doc count."""
     title_to_id = {}
     max_id = 0
-    with open(DOCNO_MAP, encoding='utf-8') as f:
+    with open(path, encoding='utf-8') as f:
         for line in f:
             parts = line.rstrip('\n').split('\t')
             if len(parts) != 2:
@@ -60,10 +64,40 @@ def all_clickstream_months():
 def main():
     t_start = time.time()
 
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--index', help='index path (e.g. /path/wikiindex/index). '
+                        'Reads <index>.docno_map.tsv emitted by zet at build time. '
+                        'Writes <index>.click_prior.bin unless --out is given.')
+    parser.add_argument('--docno-map', help='explicit docno_map.tsv path (overrides --index)')
+    parser.add_argument('--out', help='output click_prior.bin path')
+    args = parser.parse_args()
+
+    if args.docno_map:
+        docno_map_path = args.docno_map
+    elif args.index:
+        docno_map_path = args.index + '.docno_map.tsv'
+    else:
+        # Legacy fallback: ./docno_map.tsv from build_docno_map.py.
+        legacy = os.path.join(HERE, 'docno_map.tsv')
+        if os.path.exists(legacy):
+            print(f"WARNING: using legacy {legacy} — pass --index <path> to use the "
+                  "indexer-emitted docno_map and avoid drift.", file=sys.stderr)
+            docno_map_path = legacy
+        else:
+            print("ERROR: must pass --index <path> or --docno-map <file>", file=sys.stderr)
+            sys.exit(1)
+
+    if args.out:
+        output_path = args.out
+    elif args.index:
+        output_path = args.index + '.click_prior.bin'
+    else:
+        output_path = os.path.join(HERE, 'click_prior.bin')
+
     # Load docno map
-    print("Loading docno map...", flush=True)
-    title_to_id, num_docs = load_docno_map()
-    log('docno_map_loaded', docs=num_docs)
+    print(f"Loading docno map from {docno_map_path}...", flush=True)
+    title_to_id, num_docs = load_docno_map(docno_map_path)
+    log('docno_map_loaded', docs=num_docs, source=docno_map_path)
 
     # Accumulate scores per internal docno
     scores = [0.0] * num_docs
@@ -109,11 +143,11 @@ def main():
 
     # Write binary float32 array
     nonzero = sum(1 for s in scores if s > 0)
-    print(f"\nWriting {OUTPUT}...", flush=True)
-    with open(OUTPUT, 'wb') as f:
+    print(f"\nWriting {output_path}...", flush=True)
+    with open(output_path, 'wb') as f:
         f.write(struct.pack(f'{num_docs}f', *scores))
 
-    size = os.path.getsize(OUTPUT)
+    size = os.path.getsize(output_path)
     took = round(time.time() - t_start, 1)
     log('click_prior_built',
         docs=num_docs,
