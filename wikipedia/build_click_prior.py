@@ -12,7 +12,7 @@ import gzip, json, os, re, struct, sys, time
 HERE       = os.path.dirname(os.path.abspath(__file__))
 DOCNO_MAP  = os.path.join(HERE, 'docno_map.tsv')
 OUTPUT     = os.path.join(HERE, 'click_prior.bin')
-LOG_DIR    = os.path.join(HERE, '../../zettair-service/logs')
+LOG_DIR    = os.environ.get('CLICKSTREAM_LOG_DIR', os.path.join(HERE, 'logs'))
 LOG_FILE   = os.path.join(LOG_DIR, 'clickstream_refresh.jsonl')
 
 DECAY_RATE = 0.85   # per month
