@@ -22,18 +22,51 @@ def wiki_image_url(filename):
     md5 = hashlib.md5(fn.encode()).hexdigest()
     return f"https://upload.wikimedia.org/wikipedia/commons/thumb/{md5[0]}/{md5[0:2]}/{fn}/300px-{fn}"
 
+def _is_usable_image(fn):
+    """Filter out decorative / non-photo images."""
+    fn_lower = fn.lower()
+    if any(skip in fn_lower for skip in IMAGE_SKIP):
+        return False
+    if any(fn_lower.endswith(ext) for ext in IMAGE_SKIP_EXT):
+        return False
+    if not any(fn_lower.endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp')):
+        return False
+    return True
+
+
 def extract_image(raw):
-    """Extract first non-decorative image filename from raw wikitext."""
+    """Extract the article's lead image.
+
+    Prefer infobox `image = Foo.jpg` (or `image1 = ...` / `image_caption =`-
+    adjacent fields) — that's where Wikipedia puts the canonical lead image
+    for people, places, products, etc. Falls back to the first usable
+    [[File:...]] / [[Image:...]] reference in the body for articles that
+    don't use an infobox.
+
+    Without this, the Morrissey article (and many others) returned
+    Queen's_Square,_Hulme.png — the first body image in the wikitext —
+    instead of the singer's portrait that lives in the infobox.
+    """
+    # Infobox image fields. Wikipedia infoboxes look like:
+    #   {{Infobox musical artist
+    #   | image             = Morrissey crop tie.jpg <!-- ... -->
+    #   | caption           = ...
+    # so each parameter line typically starts with `|` and then the
+    # parameter name. Permissive about whitespace and ordering.
+    for m in re.finditer(
+        r'^\s*\|?\s*image[0-9_a-z]*\s*=\s*(?:File:|Image:)?\s*'
+        r'([^\|\}\n<\[]+\.(?:jpg|jpeg|png|gif|webp))',
+        raw, flags=re.I | re.M
+    ):
+        fn = m.group(1).strip()
+        if _is_usable_image(fn):
+            return wiki_image_url(fn)
+
+    # Fallback: first [[File:...]] in the body.
     for m in re.finditer(r'\[\[(?:File|Image):([^\|\]\n]+)', raw, flags=re.I):
         fn = m.group(1).strip()
-        fn_lower = fn.lower()
-        if any(skip in fn_lower for skip in IMAGE_SKIP):
-            continue
-        if any(fn_lower.endswith(ext) for ext in IMAGE_SKIP_EXT):
-            continue
-        if not any(fn_lower.endswith(ext) for ext in ('.jpg', '.jpeg', '.png', '.gif', '.webp')):
-            continue
-        return wiki_image_url(fn)
+        if _is_usable_image(fn):
+            return wiki_image_url(fn)
     return None
 
 def extract_snippet(text):
