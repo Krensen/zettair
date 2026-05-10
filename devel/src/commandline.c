@@ -1416,6 +1416,7 @@ int main(int argc, char **argv) {
                 /* Load click prior if ZET_CLICK_PRIOR env var is set */
                 extern void okapi_load_prior(const char *path, double alpha);
                 extern void okapi_load_field_boosts(void);
+                extern void okapi_load_perfield(void);
                 {
                     const char *prior_path = getenv("ZET_CLICK_PRIOR");
                     if (prior_path) {
@@ -1427,6 +1428,9 @@ int main(int argc, char **argv) {
                 /* PRD-017: load per-field BM25 boosts from env vars
                  * (ZET_BOOST_TITLE, ZET_BOOST_CAPTION, etc.) */
                 okapi_load_field_boosts();
+                /* PRD-019: load per-field BM25 sidecars (no-op unless
+                 * ZET_PERFIELD_BM25=1). */
+                okapi_load_perfield();
 
                 gettimeofday(&then, NULL);
 

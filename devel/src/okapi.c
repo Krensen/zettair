@@ -30,8 +30,10 @@
 #include "search.h"
 #include "str.h"
 #include <math.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/time.h>
 
 /* Fine-grained accumulators for inner-loop timing inside or_decode_offsets.
@@ -69,6 +71,32 @@ static int g_field_boost_loaded = 0;
  * Set by okapi_load_field_boosts based on env vars. */
 static int g_field_boost_active = 0;
 
+/* ── PRD-019: per-field BM25 (BM25F) ─────────────────────────────────────
+ * A different scoring path: instead of one BM25_tf with a flat per-occurrence
+ * weight, compute BM25_tf separately for each field with its own length
+ * normalisation, then sum weighted by w_f. Activated by setting
+ * ZET_PERFIELD_BM25=1 plus pointing ZET_FIELD_LENGTHS_PATH and
+ * ZET_FIELD_STATS_PATH at the sidecars built by build_field_lengths.py. */
+static int       g_perfield_active = 0;
+static int       g_perfield_loaded = 0;
+static uint32_t *g_field_lengths   = NULL;     /* N_docs * POSTINGS_MAX_FIELDS u32 */
+static unsigned int g_field_lengths_ndocs = 0;
+static double    g_field_avg_len[POSTINGS_MAX_FIELDS];
+static unsigned int g_field_n_with[POSTINGS_MAX_FIELDS];
+/* Per-field weights (w_f) and length-norm parameters (b_f). Defaults are
+ * neutral: w=1.0, b=0.75 (standard BM25). Override per-field via env vars
+ * ZET_FIELD_W_BODY / _TITLE / _CAPTION etc., and ZET_FIELD_B_*. */
+static double g_field_w[POSTINGS_MAX_FIELDS] = {
+    1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+    1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+};
+static double g_field_b[POSTINGS_MAX_FIELDS] = {
+    0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75,
+    0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75, 0.75,
+};
+
+void okapi_load_perfield(void);  /* forward decl, defined below */
+
 void okapi_load_field_boosts(void) {
     static const struct { const char *name; unsigned int field; } envs[] = {
         {"ZET_BOOST_TITLE",    1},
@@ -104,6 +132,147 @@ void okapi_load_field_boosts(void) {
         }
     }
     g_field_boost_loaded = 1;
+}
+
+/* PRD-019: load per-field BM25 sidecars and config. Activated by setting
+ * ZET_PERFIELD_BM25=1. Reads field_lengths.bin and field_stats.bin from
+ * paths set by ZET_FIELD_LENGTHS_PATH and ZET_FIELD_STATS_PATH. Reads
+ * per-field w and b from ZET_FIELD_W_<NAME> and ZET_FIELD_B_<NAME>. */
+void okapi_load_perfield(void) {
+    static const struct { const char *suffix; unsigned int field; } envs[] = {
+        {"BODY",     0},
+        {"TITLE",    1},
+        {"CAPTION",  2},
+        {"CATEGORY", 3},
+        {"SEEALSO",  4},
+        {"INFOBOX",  5},
+    };
+    const char *enable;
+    const char *lengths_path;
+    const char *stats_path;
+    FILE *f;
+    long sz;
+    unsigned int n_docs_h, n_fields_h;
+    unsigned int i;
+
+    if (g_perfield_loaded) return;
+    g_perfield_loaded = 1;
+
+    enable = getenv("ZET_PERFIELD_BM25");
+    if (!enable || !*enable || enable[0] == '0') {
+        return;  /* not enabled */
+    }
+
+    lengths_path = getenv("ZET_FIELD_LENGTHS_PATH");
+    stats_path   = getenv("ZET_FIELD_STATS_PATH");
+    if (!lengths_path || !stats_path) {
+        fprintf(stderr, "[perfield] ZET_PERFIELD_BM25 set but "
+                "ZET_FIELD_LENGTHS_PATH or ZET_FIELD_STATS_PATH unset; disabled\n");
+        return;
+    }
+
+    /* Load field_lengths.bin */
+    f = fopen(lengths_path, "rb");
+    if (!f) {
+        fprintf(stderr, "[perfield] could not open %s; disabled\n", lengths_path);
+        return;
+    }
+    fseek(f, 0, SEEK_END);
+    sz = ftell(f);
+    rewind(f);
+    if (sz <= 0 || (sz % (sizeof(uint32_t) * POSTINGS_MAX_FIELDS)) != 0) {
+        fprintf(stderr, "[perfield] %s has unexpected size %ld; disabled\n",
+                lengths_path, sz);
+        fclose(f);
+        return;
+    }
+    g_field_lengths_ndocs = (unsigned int)(sz / (sizeof(uint32_t) * POSTINGS_MAX_FIELDS));
+    g_field_lengths = (uint32_t *)malloc(sz);
+    if (!g_field_lengths) {
+        fprintf(stderr, "[perfield] OOM allocating field_lengths; disabled\n");
+        fclose(f);
+        return;
+    }
+    if (fread(g_field_lengths, 1, sz, f) != (size_t)sz) {
+        fprintf(stderr, "[perfield] short read on %s; disabled\n", lengths_path);
+        free(g_field_lengths);
+        g_field_lengths = NULL;
+        fclose(f);
+        return;
+    }
+    fclose(f);
+
+    /* Load field_stats.bin: header (n_docs u32, n_fields u32) then
+     * per-field (avg_len double, n_with u32) for n_fields entries. */
+    f = fopen(stats_path, "rb");
+    if (!f) {
+        fprintf(stderr, "[perfield] could not open %s; disabled\n", stats_path);
+        free(g_field_lengths);
+        g_field_lengths = NULL;
+        return;
+    }
+    if (fread(&n_docs_h,   sizeof(uint32_t), 1, f) != 1 ||
+        fread(&n_fields_h, sizeof(uint32_t), 1, f) != 1) {
+        fprintf(stderr, "[perfield] short read on %s header; disabled\n", stats_path);
+        free(g_field_lengths);
+        g_field_lengths = NULL;
+        fclose(f);
+        return;
+    }
+    if (n_docs_h != g_field_lengths_ndocs || n_fields_h != POSTINGS_MAX_FIELDS) {
+        fprintf(stderr, "[perfield] sidecar header mismatch (docs=%u fields=%u); disabled\n",
+                n_docs_h, n_fields_h);
+        free(g_field_lengths);
+        g_field_lengths = NULL;
+        fclose(f);
+        return;
+    }
+    for (i = 0; i < POSTINGS_MAX_FIELDS; i++) {
+        double avg;
+        uint32_t nw;
+        if (fread(&avg, sizeof(double), 1, f) != 1 ||
+            fread(&nw,  sizeof(uint32_t), 1, f) != 1) {
+            fprintf(stderr, "[perfield] short read on %s field %u; disabled\n", stats_path, i);
+            free(g_field_lengths);
+            g_field_lengths = NULL;
+            fclose(f);
+            return;
+        }
+        g_field_avg_len[i] = avg;
+        g_field_n_with[i]  = nw;
+    }
+    fclose(f);
+
+    /* Per-field w and b env vars. */
+    for (i = 0; i < sizeof(envs) / sizeof(envs[0]); i++) {
+        char buf[64];
+        const char *v;
+        char *end;
+        double d;
+        snprintf(buf, sizeof(buf), "ZET_FIELD_W_%s", envs[i].suffix);
+        v = getenv(buf);
+        if (v && *v) {
+            d = strtod(v, &end);
+            if (end != v && d >= 0.0) g_field_w[envs[i].field] = d;
+        }
+        snprintf(buf, sizeof(buf), "ZET_FIELD_B_%s", envs[i].suffix);
+        v = getenv(buf);
+        if (v && *v) {
+            d = strtod(v, &end);
+            if (end != v && d >= 0.0 && d <= 1.0) g_field_b[envs[i].field] = d;
+        }
+    }
+
+    g_perfield_active = 1;
+    fprintf(stderr, "[perfield] enabled: %u docs, %u fields\n",
+            g_field_lengths_ndocs, POSTINGS_MAX_FIELDS);
+    for (i = 0; i < POSTINGS_MAX_FIELDS; i++) {
+        if (g_field_n_with[i] > 0 || g_field_w[i] != 1.0 || g_field_b[i] != 0.75) {
+            fprintf(stderr, "[perfield] field %u: avg_L=%.2f n_with=%u w=%.2f b=%.2f\n",
+                    i, g_field_avg_len[i], g_field_n_with[i],
+                    g_field_w[i], g_field_b[i]);
+        }
+    }
 }
 
 void okapi_load_prior(const char *path, double alpha) {
@@ -372,8 +541,73 @@ static enum search_ret post(struct index *idx, struct query *query, struct searc
             }                                                                 \
         }                                                                     \
     } while (0)
- 
-static enum search_ret or_decode(struct index *idx, struct query *query, 
+
+/* PRD-019: read f_dt offsets and accumulate per-field counts into the
+ * f_dt_f[POSTINGS_MAX_FIELDS] array. Same vbyte trick as
+ * READ_OFFSETS_WEIGHTED — the field_id is in the low bits of the first
+ * byte of each offset's vbyte sequence. */
+#define READ_OFFSETS_PERFIELD(src, v, f_dt, f_dt_f)                           \
+    do {                                                                      \
+        unsigned int toread = f_dt;                                           \
+        enum search_ret sret;                                                 \
+        unsigned char *p, *e;                                                 \
+        unsigned int _i;                                                      \
+        for (_i = 0; _i < POSTINGS_MAX_FIELDS; _i++) (f_dt_f)[_i] = 0;        \
+        while (toread) {                                                      \
+            p = (unsigned char *)(v)->pos;                                    \
+            e = (unsigned char *)(v)->end;                                    \
+            while (toread && p < e) {                                         \
+                unsigned char *start = p;                                     \
+                while (p < e && (*p & 0x80)) p++;                             \
+                if (p < e) {                                                  \
+                    (f_dt_f)[*start & POSTINGS_FIELD_MASK]++;                 \
+                    p++;                                                      \
+                    toread--;                                                 \
+                } else {                                                      \
+                    p = start;                                                \
+                    break;                                                    \
+                }                                                             \
+            }                                                                 \
+            (v)->pos = (char *)p;                                             \
+            if (toread) {                                                     \
+                if ((sret = src->read(src, VEC_LEN(v),                        \
+                    (void **) &(v)->pos, &bytes)) == SEARCH_OK) {             \
+                    (v)->end = (v)->pos + bytes;                              \
+                } else if (sret == SEARCH_FINISH) {                           \
+                    return SEARCH_EINVAL;                                     \
+                } else {                                                      \
+                    return sret;                                              \
+                }                                                             \
+            }                                                                 \
+        }                                                                     \
+    } while (0)
+
+/* PRD-019: compute per-field BM25 score contribution given f_dt_f counts.
+ * Returns sum_f w_f * BM25_tf(f_dt_f[f], L_f, avg_L_f, k1, b_f).
+ * docno is the internal Zettair docno, used to index field_lengths. */
+static inline double perfield_score(unsigned long int docno,
+    const unsigned int *f_dt_f, double k1) {
+    double r_dt = 0.0;
+    unsigned int f;
+    if (docno >= g_field_lengths_ndocs) return 0.0;
+    for (f = 0; f < POSTINGS_MAX_FIELDS; f++) {
+        unsigned int n = f_dt_f[f];
+        double L_f, avg, b, tf;
+        if (n == 0) continue;
+        if (g_field_w[f] <= 0.0) continue;
+        avg = g_field_avg_len[f];
+        if (avg <= 0.0) continue;
+        L_f = (double)g_field_lengths[docno * POSTINGS_MAX_FIELDS + f];
+        if (L_f <= 0.0) L_f = avg;  /* missing data — neutral */
+        b = g_field_b[f];
+        tf = ((k1 + 1.0) * (double)n) /
+             (k1 * ((1.0 - b) + b * L_f / avg) + (double)n);
+        r_dt += g_field_w[f] * tf;
+    }
+    return r_dt;
+}
+
+static enum search_ret or_decode(struct index *idx, struct query *query,
   unsigned int qterm, unsigned long int docno, 
   struct search_metric_results *results, struct search_list_src *src, 
   int opts, struct index_search_opt *opt) {
@@ -494,6 +728,7 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
     double w_t;
     double r_dt;
     double weighted_f_dt;          /* PRD-017: field-boosted f_dt */
+    unsigned int f_dt_f[POSTINGS_MAX_FIELDS]; /* PRD-019: per-field counts */
 
     double r_qt = (((param->k3) + 1) * (query->term[qterm].f_qt)) / ((param->k3) + (query->term[qterm].f_qt));
     if (docmap_avg_words(idx->map, &avg_D_terms) != DOCMAP_OK) {
@@ -508,8 +743,8 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
         /* use a very small increment instead */
         w_t = FLT_EPSILON;
     }
-    
-    
+
+
 
 
     while (1) {
@@ -517,7 +752,12 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
         while (NEXT_DOC(&v, docno, f_dt)) {
             unsigned long walk = 0;
             double t1, t2, t3;
-            READ_OFFSETS_WEIGHTED(src, &v, f_dt, weighted_f_dt);
+            if (g_perfield_active) {
+                READ_OFFSETS_PERFIELD(src, &v, f_dt, f_dt_f);
+                weighted_f_dt = (double)f_dt;  /* unused on perfield path */
+            } else {
+                READ_OFFSETS_WEIGHTED(src, &v, f_dt, weighted_f_dt);
+            }
             t1 = tnow_us();
 
             /* merge into accumulator list */
@@ -530,7 +770,11 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
 
             if (acc && (docno == acc->acc.docno)) {
                 /* METRIC_PER_DOC */
-                r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
+                if (g_perfield_active) {
+                    r_dt = perfield_score(acc->acc.docno, f_dt_f, param->k1);
+                } else {
+                    r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
+                }
                 (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
             } else {
@@ -546,7 +790,11 @@ static enum search_ret or_decode_offsets(struct index *idx, struct query *query,
                 acc->acc.docno = docno;
                 acc->acc.weight = 0.0;
                 /* METRIC_PER_DOC */
-                r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
+                if (g_perfield_active) {
+                    r_dt = perfield_score(acc->acc.docno, f_dt_f, param->k1);
+                } else {
+                    r_dt = ((((param->k1) + 1) * weighted_f_dt) / ((param->k1) * ((1 - (param->b)) + (((param->b) * (DOCMAP_GET_WORDS(idx->map, acc->acc.docno))) / avg_D_terms)) + weighted_f_dt));
+                }
                 (acc->acc.weight) += r_dt * w_t * r_qt * click_boost(acc->acc.docno);
 
                 *prevptr = newacc;
