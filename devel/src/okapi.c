@@ -128,14 +128,22 @@ void okapi_load_prior(const char *path, double alpha) {
 }
 
 static inline double click_boost(unsigned long int docno) {
-    /* Returns 1.0 (no change) — inline multiplication disabled.
-       Click prior is applied additively in post() instead. */
+    /* Multiplicative click factor: score *= 1 + alpha * log(1 + clicks).
+     * Multiplicative was tried earlier as additive (click_addend in post),
+     * but additive lifted globally-popular articles by a fixed margin
+     * regardless of query relevance — so a query like "sundar pichai"
+     * had Google beat Sundar because Google's global clicks dominated.
+     * Multiplicative scales with the BM25 base, so the boost is bounded
+     * by how relevant the doc already is. */
+    if (g_click_prior && docno < g_click_prior_len && g_click_prior[docno] > 0.0f)
+        return 1.0 + g_click_alpha * log(1.0 + (double)g_click_prior[docno]);
     return 1.0;
 }
 
 static inline double click_addend(unsigned long int docno) {
-    if (g_click_prior && docno < g_click_prior_len && g_click_prior[docno] > 0.0f)
-        return g_click_alpha * log(1.0 + (double)g_click_prior[docno]);
+    /* Disabled — kept as a no-op to avoid touching the post() path. */
+    (void)docno;
+    return 0.0;
     return 0.0;
 }
 
