@@ -40,6 +40,34 @@ def months_ago(ym: str, reference: str) -> int:
     return (y2 - y1) * 12 + (m2 - m1)
 
 
+def read_trending_titles(path: str) -> set[str]:
+    """Load every unique article title that has appeared in trending
+    history. Each line is one JSON sample with rows = [[title, views], ...].
+
+    Returns the empty set if the file doesn't exist — first rebuild, or
+    a deploy without PRD-020 yet. Never raises on a per-line parse
+    error; trending data is best-effort and shouldn't break the index
+    build."""
+    titles: set[str] = set()
+    if not os.path.exists(path):
+        return titles
+    import json
+    bad = 0
+    with open(path, encoding='utf-8') as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+                for row in rec.get('rows', []):
+                    if row and row[0]:
+                        titles.add(row[0])
+            except (json.JSONDecodeError, TypeError, IndexError):
+                bad += 1
+                continue
+    if bad:
+        print(f'  warning: {bad} unparseable lines in {path}', flush=True)
+    return titles
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__,
                                      formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -47,6 +75,11 @@ def main():
                         help='Number of top articles to select [default: 1000000]')
     parser.add_argument('--out', default=None,
                         help='Output path [default: top_titles.txt next to this script]')
+    parser.add_argument('--trending-history', default='/mnt/wikipedia-source/trending/history.jsonl',
+                        help='PRD-020 trending history file. Every title that has ever appeared in '
+                             'a sample is union-ed into the corpus on top of the top-N click '
+                             'selection — guarantees we never have a trending chip pointing at '
+                             'an article we don\'t have indexed. Pass /dev/null to disable.')
     args = parser.parse_args()
 
     out_path = args.out or os.path.join(HERE, 'top_titles.txt')
@@ -92,19 +125,33 @@ def main():
 
     print(f'\nTotal unique articles scored: {len(scores):,}', flush=True)
 
-    # Sort by descending score, take top N
+    # Sort by descending score, take top N from clickstream.
     ranked = sorted(scores.items(), key=lambda x: -x[1])
     top = ranked[:args.top]
+    top_titles = {t for t, _ in top}
 
-    print(f'Writing top {len(top):,} titles to {out_path}...', flush=True)
+    # Union in every title that has ever shown up in the trending history.
+    # This guarantees a popular page that broke after the last clickstream
+    # dump (e.g. "Mark_Carney" the week he becomes PM) is in the corpus.
+    # Without this, the homepage chip rail could point at an article we
+    # don't actually have indexed.
+    trending = read_trending_titles(args.trending_history)
+    added_from_trending = trending - top_titles
+    print(f'\nTrending history adds {len(added_from_trending):,} titles '
+          f'on top of the top-{args.top:,} clickstream cut '
+          f'(read {len(trending):,} unique from {args.trending_history})', flush=True)
+
+    final_titles = list(t for t, _ in top) + sorted(added_from_trending)
+
+    print(f'Writing {len(final_titles):,} titles to {out_path}...', flush=True)
     with open(out_path, 'w', encoding='utf-8') as f:
-        for title, _ in top:
+        for title in final_titles:
             f.write(title + '\n')
 
     elapsed = time.time() - t0
     print(f'Done in {elapsed:.1f}s', flush=True)
 
-    # Spot-check: show top 20
+    # Spot-check: show top 20 from clickstream
     print('\nTop 20 articles by decayed click score:')
     for title, score in top[:20]:
         print(f'  {round(score):>12,}  {title}')
@@ -113,6 +160,13 @@ def main():
     if len(top) >= args.top:
         cutoff_title, cutoff_score = top[args.top - 1]
         print(f'\nCutoff (rank {args.top:,}): {cutoff_title} ({round(cutoff_score):,} decayed clicks)')
+
+    # Show a few of the trending-only additions if any.
+    if added_from_trending:
+        sample = sorted(added_from_trending)[:10]
+        print(f'\nSample of trending-only additions:')
+        for t in sample:
+            print(f'  {t}')
 
 
 if __name__ == '__main__':
