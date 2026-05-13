@@ -218,6 +218,9 @@ def main() -> None:
                    help="path to top_titles.txt (corpus restriction)")
     p.add_argument("--out", type=Path, required=True,
                    help="output JSON path (entity_classes.json)")
+    p.add_argument("--titles-out", type=Path, default=None,
+                   help="optional: also emit a (docno\\tdisplay_title) TSV at this path "
+                        "(PRD-026 uses this to match Google News headlines onto docnos)")
     args = p.parse_args()
 
     if not args.enwiki_dump.exists():
@@ -275,6 +278,19 @@ def main() -> None:
         json.dump(docno_to_class, f, separators=(",", ":"), sort_keys=True)
     os.replace(tmp, args.out)
     print(f"wrote {args.out} ({args.out.stat().st_size/1024/1024:.1f} MB)", flush=True)
+
+    # PRD-026: also emit a TSV of (docno, display_title) for entity
+    # articles. The trending fetcher loads this as a reverse index to
+    # match Google News top-stories headlines onto Wikipedia docnos.
+    if args.titles_out:
+        args.titles_out.parent.mkdir(parents=True, exist_ok=True)
+        ttmp = args.titles_out.with_suffix(args.titles_out.suffix + ".tmp")
+        with open(ttmp, "w", encoding="utf-8") as f:
+            for docno in sorted(docno_to_class.keys()):
+                display = docno.replace("_", " ")
+                f.write(f"{docno}\t{display}\n")
+        os.replace(ttmp, args.titles_out)
+        print(f"wrote {args.titles_out} ({args.titles_out.stat().st_size/1024/1024:.1f} MB)", flush=True)
 
 
 if __name__ == "__main__":
