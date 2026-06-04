@@ -125,6 +125,13 @@ def load_titles(path):
 
 URL_PREFIX = 'https://en.wikipedia.org/wiki/'
 
+# PRD-031 followup: strip the Wikipedia disambiguator suffix
+# ("Mercury (planet)" -> "Mercury") from the indexed TITLE only. The
+# display sidecar and TEXT body keep the full title. Matches
+# trailing "(...)" with no nested parens, leading whitespace
+# tolerated.
+_DISAMB_PAREN_RE = re.compile(r'\s*\([^()]+\)\s*$')
+
 
 def convert(xml_path, trec_path, titles=None):
     base = trec_path.replace('.trec', '')
@@ -221,18 +228,30 @@ def convert(xml_path, trec_path, titles=None):
 
             # PRD-031: canonical display title sidecar. Every docno
             # gets an entry. server.py reads this directly instead of
-            # parsing it back out of the URL (which was a hack).
+            # parsing it back out of the URL (which was a hack). This
+            # is the *full* title including the disambiguator
+            # ("Mercury (planet)"); display-only.
             encoded_title = title.encode('utf-8')
             title_map[docno] = [title_offset, len(encoded_title)]
             title_store.write(encoded_title)
             title_offset += len(encoded_title)
 
-            # PRD-017: emit the title as a <TITLE> tag so zet tags those
-            # term occurrences with field_id=1 in the postings, and the
-            # BM25 scorer applies ZET_BOOST_TITLE at query time.
-            # The title is also kept at the start of <TEXT> so the inline
-            # Python summariser sees it as the first prose fragment.
-            out.write(f'<DOC>\n<DOCNO>{docno}</DOCNO>\n<TITLE>{title}</TITLE>\n<TEXT>\n{title}. {text}\n</TEXT>\n</DOC>\n')
+            # PRD-031 followup: the indexed TITLE drops the
+            # disambiguator. Wikipedia's "(planet)" / "(film)" /
+            # "(album)" suffix is metadata that disambiguates a
+            # docno, not content about the page. Indexing it inflates
+            # the title's effective length under BM25F b=1.0, which
+            # currently makes "Mercury (planet)" tie on title-tf
+            # against any other 2-word title containing "mercury"
+            # (Freddie_Mercury, Mercury_Cougar, ...). With the
+            # disambiguator stripped from the indexed title, the
+            # planet's title is just "Mercury" — a 1-word exact match
+            # for the bare query, on par with the disambig page.
+            # The disambiguator survives in <TEXT> (one paragraph
+            # below) so queries like "Mercury planet" still match it
+            # via the body field.
+            index_title = _DISAMB_PAREN_RE.sub('', title).strip()
+            out.write(f'<DOC>\n<DOCNO>{docno}</DOCNO>\n<TITLE>{index_title}</TITLE>\n<TEXT>\n{title}. {text}\n</TEXT>\n</DOC>\n')
             count += 1
 
             if count % 10000 == 0:
