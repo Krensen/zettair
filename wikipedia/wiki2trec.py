@@ -128,20 +128,28 @@ URL_PREFIX = 'https://en.wikipedia.org/wiki/'
 
 def convert(xml_path, trec_path, titles=None):
     base = trec_path.replace('.trec', '')
-    snip_store_path = base + '_snippets.store'
-    snip_map_path   = base + '_snippets.map'
-    img_store_path  = base + '_images.store'
-    img_map_path    = base + '_images.map'
-    url_store_path  = base + '_urls.store'
-    url_map_path    = base + '_urls.map'
+    snip_store_path  = base + '_snippets.store'
+    snip_map_path    = base + '_snippets.map'
+    img_store_path   = base + '_images.store'
+    img_map_path     = base + '_images.map'
+    url_store_path   = base + '_urls.store'
+    url_map_path     = base + '_urls.map'
+    # PRD-031: canonical Wikipedia display title per docno. Covers
+    # 100% of the corpus (unlike the URL sidecar which only stores
+    # dbkey-mismatched docnos) so server-side title rendering is one
+    # FlatStore lookup, never a URL parse.
+    title_store_path = base + '_titles.store'
+    title_map_path   = base + '_titles.map'
 
     count = skipped = filtered = img_count = url_count = 0
-    snip_map = {}
-    img_map  = {}
-    url_map  = {}
-    snip_offset = 0
-    img_offset  = 0
-    url_offset  = 0
+    snip_map  = {}
+    img_map   = {}
+    url_map   = {}
+    title_map = {}
+    snip_offset  = 0
+    img_offset   = 0
+    url_offset   = 0
+    title_offset = 0
 
     # Stream bz2 or plain XML
     if xml_path.endswith('.bz2'):
@@ -151,9 +159,10 @@ def convert(xml_path, trec_path, titles=None):
 
     with fh, \
          open(trec_path, 'w', encoding='utf-8') as out, \
-         open(snip_store_path, 'wb') as snip_store, \
-         open(img_store_path,  'wb') as img_store, \
-         open(url_store_path,  'wb') as url_store:
+         open(snip_store_path,  'wb') as snip_store, \
+         open(img_store_path,   'wb') as img_store, \
+         open(url_store_path,   'wb') as url_store, \
+         open(title_store_path, 'wb') as title_store:
 
         for event, elem in ET.iterparse(fh, events=('end',)):
             if elem.tag != f'{{{NS}}}page':
@@ -210,6 +219,14 @@ def convert(xml_path, trec_path, titles=None):
                 img_offset += len(encoded_img)
                 img_count += 1
 
+            # PRD-031: canonical display title sidecar. Every docno
+            # gets an entry. server.py reads this directly instead of
+            # parsing it back out of the URL (which was a hack).
+            encoded_title = title.encode('utf-8')
+            title_map[docno] = [title_offset, len(encoded_title)]
+            title_store.write(encoded_title)
+            title_offset += len(encoded_title)
+
             # PRD-017: emit the title as a <TITLE> tag so zet tags those
             # term occurrences with field_id=1 in the postings, and the
             # BM25 scorer applies ZET_BOOST_TITLE at query time.
@@ -238,13 +255,17 @@ def convert(xml_path, trec_path, titles=None):
     with open(url_map_path, 'w', encoding='utf-8') as f:
         json.dump(url_map, f, separators=(',', ':'))
 
+    print(f'Writing {title_map_path}...', flush=True)
+    with open(title_map_path, 'w', encoding='utf-8') as f:
+        json.dump(title_map, f, separators=(',', ':'))
+
     if titles is not None:
         matched_pct = 100 * count / len(titles) if titles else 0
         print(f'Allowlist match: {count:,} of {len(titles):,} titles found in dump ({matched_pct:.1f}%)', flush=True)
         if count < len(titles) * 0.8:
             print(f'WARNING: fewer than 80% of allowlist titles matched — check title normalisation', flush=True)
 
-    print(f'Done: {count:,} articles written, {skipped:,} skipped, {filtered:,} filtered, {img_count:,} images, {url_count:,} URLs.')
+    print(f'Done: {count:,} articles written, {skipped:,} skipped, {filtered:,} filtered, {img_count:,} images, {url_count:,} URLs, {len(title_map):,} titles.')
     return count, count, img_count
 
 if __name__ == '__main__':
