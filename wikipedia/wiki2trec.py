@@ -90,8 +90,36 @@ def extract_snippet(text):
             break
     return snippet[:600] if snippet else text[:300]
 
+_TERMINATOR_HEADINGS = {
+    "references", "notes", "footnotes", "citations",
+    "external links", "see also", "further reading",
+    "bibliography", "sources", "works cited",
+    "external sources", "external resources",
+}
+_HEADING_RE = re.compile(r'={2,6}\s*([^=\n]+?)\s*={2,6}')
+
+
 def clean(text):
-    """Strip wikitext markup from article text."""
+    """Strip wikitext markup from article text.
+
+    PRD-030 step E: paragraph structure is preserved (\\n\\n stays as
+    a real paragraph break) so the downstream summariser can identify
+    the lede, section boundaries, and other structural cues. Section
+    headings become paragraph breaks. Trailing reference / external-
+    link sections are truncated entirely — they are 100 percent
+    citation residue and can never produce good snippets.
+    """
+    # Drop everything from the first terminator heading onward. Run
+    # this BEFORE stripping markup so the heading is still visible.
+    cut = None
+    for m in _HEADING_RE.finditer(text):
+        if m.group(1).strip().lower() in _TERMINATOR_HEADINGS:
+            cut = m.start()
+            break
+    if cut is not None:
+        text = text[:cut]
+
+    # Templates, files, categories.
     for _ in range(5):
         t = re.sub(r'\{\{[^{}]*\}\}', '', text)
         if t == text: break
@@ -102,12 +130,30 @@ def clean(text):
     text = re.sub(r'\[https?://\S+\s+([^\]]+)\]', r'\1', text)
     text = re.sub(r'\[https?://\S+\]', '', text)
     text = re.sub(r"'{2,3}", '', text)
-    text = re.sub(r'={2,6}[^=]+=+', ' ', text)
+
+    # Section headings become paragraph breaks (preserve the
+    # boundary, drop the heading text — headings like "Early life"
+    # are not snippet-worthy prose but the break tells the
+    # summariser that what follows is a fresh topic).
+    text = _HEADING_RE.sub('\n\n', text)
+
     text = re.sub(r'<[^>]+>', ' ', text)
     text = re.sub(r'&[a-z#]+;', ' ', text)
     text = re.sub(r'\]\]|\[\[', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+
+    # Whitespace normalisation that PRESERVES paragraph breaks:
+    # 1. collapse runs of non-newline whitespace
+    # 2. collapse 3+ newlines to exactly 2 (single newlines kept as-is
+    #    for now, but they will be merged in step 3)
+    # 3. collapse single newlines (with optional surrounding spaces)
+    #    to a space; paragraph breaks (now exactly \n\n) stay.
+    text = re.sub(r'[^\S\n]+', ' ', text)        # 1
+    text = re.sub(r'\n{3,}', '\n\n', text)       # 2
+    text = re.sub(r'(?<!\n)\n(?!\n)', ' ', text) # 3
+    # Final tidy: collapse any double-spaces that the above produced.
+    text = re.sub(r' +', ' ', text)
+    text = re.sub(r' *\n\n *', '\n\n', text)
+    return text.strip()
 
 def safe_id(title):
     return re.sub(r'[^\w\-]', '_', title)[:80]
