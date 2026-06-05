@@ -251,7 +251,20 @@ def convert(xml_path, trec_path, titles=None):
             # below) so queries like "Mercury planet" still match it
             # via the body field.
             index_title = _DISAMB_PAREN_RE.sub('', title).strip()
-            out.write(f'<DOC>\n<DOCNO>{docno}</DOCNO>\n<TITLE>{index_title}</TITLE>\n<TEXT>\n{title}. {text}\n</TEXT>\n</DOC>\n')
+            # Emit the indexed (stripped) title in <TITLE> for the
+            # BM25F scorer, and the full (unstripped) title in a
+            # sibling <DISPLAY_TITLE> tag that bootstrap consumers
+            # (build_titles_sidecar.py) read to populate the PRD-031
+            # display sidecar. <DISPLAY_TITLE> is not indexed by zet
+            # because its tokeniser only knows about TITLE/TEXT.
+            out.write(
+                f'<DOC>\n'
+                f'<DOCNO>{docno}</DOCNO>\n'
+                f'<TITLE>{index_title}</TITLE>\n'
+                f'<DISPLAY_TITLE>{title}</DISPLAY_TITLE>\n'
+                f'<TEXT>\n{title}. {text}\n</TEXT>\n'
+                f'</DOC>\n'
+            )
             count += 1
 
             if count % 10000 == 0:
