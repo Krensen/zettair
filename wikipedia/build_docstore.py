@@ -71,24 +71,16 @@ def _is_citation_sentence(sent: str) -> bool:
     return False
 
 
-def strip_wiki_markup(text: str) -> str:
-    """
-    Clean text that has already been through wiki2trec.py's clean() pass.
-    Strategy: split into sentences, drop citation sentences, rejoin.
-    This works on the flat single-line-per-article format wiki2trec produces.
-    """
+def _filter_one_paragraph(para: str) -> str:
+    """Sentence-tokenise one paragraph, drop citation sentences, rejoin.
+    Preserved as its own function so the outer call site can iterate
+    over paragraphs without losing paragraph structure."""
     # Strip bullet markers
-    text = _RE_BULLET.sub('', text)
-
-    # Remove raw ISBN blocks (the keyword + number, no surrounding sentence needed)
-    text = _RE_ISBN.sub('', text)
-
-    # Split on sentence boundaries: period/!/? followed by space + capital letter.
-    # Use re.split with a capturing group so we keep the delimiter characters.
-    parts = re.split(r'([.!?])\s+(?=[A-Z(])', text)
-
-    # re.split with a group interleaves [text, delim, text, delim, ...]
-    # Reassemble into sentences first.
+    para = _RE_BULLET.sub('', para)
+    # Remove raw ISBN blocks
+    para = _RE_ISBN.sub('', para)
+    # Sentence boundaries: . / ! / ? followed by whitespace + uppercase.
+    parts = re.split(r'([.!?])\s+(?=[A-Z(])', para)
     sentences = []
     i = 0
     while i < len(parts):
@@ -101,13 +93,31 @@ def strip_wiki_markup(text: str) -> str:
         seg = seg.strip()
         if seg:
             sentences.append(seg)
-
-    # Filter out citation sentences
     prose = [s for s in sentences if not _is_citation_sentence(s)]
+    out = ' '.join(prose)
+    out = re.sub(r' {2,}', ' ', out)
+    return out.strip()
 
-    text = ' '.join(prose)
-    text = re.sub(r' {2,}', ' ', text)
-    return text.strip()
+
+def strip_wiki_markup(text: str) -> str:
+    """
+    Clean text that has already been through wiki2trec.py's clean() pass.
+    Strategy: split on paragraph boundaries first (preserved by the
+    PRD-030 step E clean() update), then run sentence-level citation
+    filtering inside each paragraph. Rejoin with a paragraph break so
+    the downstream summariser can identify the lede and section
+    boundaries.
+    """
+    paragraphs = text.split('\n\n')
+    out_paragraphs: list[str] = []
+    for para in paragraphs:
+        para = para.strip()
+        if not para:
+            continue
+        cleaned = _filter_one_paragraph(para)
+        if cleaned:
+            out_paragraphs.append(cleaned)
+    return '\n\n'.join(out_paragraphs)
 
 def main():
     t0 = time.time()
